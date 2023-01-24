@@ -32,7 +32,7 @@ def plot_states(
     U  : jnp.ndarray = None, 
     T_Y : jnp.ndarray = None, 
     Y : jnp.ndarray = None,
-    state_names : List[str] = ['angle [degree]', 'velocity [degree]'], 
+    state_names : List[str] = ['angle [degrees]', 'velocity [degrees]'], 
     is_angle : List[bool] = [True, True] 
 ):
     """
@@ -83,12 +83,11 @@ def plot_output_comparison(
     T_Y : jnp.ndarray = None, 
     Y1 : jnp.ndarray = None,
     Y2 : jnp.ndarray = None,
-    names : List[str] = ['measured angle [degree]', 'simulated angle [degree]'], 
+    names : List[str] = ['measured angle [degrees]', 'simulated angle [degrees]'], 
     is_angle : List[bool] = [True, True] 
 ):
     """
-        Plot a time series of the given data. Herein, T is the vector describing
-        the sample times and 
+        Plot a time series comparison of two output signals Y1 and Y2.
     """
     
     fig = make_subplots(
@@ -108,3 +107,39 @@ def plot_output_comparison(
 
     fig.update_layout(height=600, width=800)
     fig.show()
+    
+    
+    
+def plot_state_comparison(
+    T : jnp.ndarray = None, 
+    X1 : jnp.ndarray = None,
+    X2 : jnp.ndarray = None,
+    names : List[str] = ['angle [degrees]', 'anglular velocity [degrees/s]'], 
+    is_angle : List[bool] = [True, True],
+    left_label_postfix = ' (1)',
+    right_label_postfix = ' (2)',
+):
+    """
+        Plot a time series comparison of two state trajectories X1 and T2.
+    """
+    
+    n_states = X1.shape[1]
+    assert X2.shape[1] == n_states
+    assert X1.shape[0] == X2.shape[0]
+    
+    fig = make_subplots(
+        rows=n_states,
+        cols=1,
+        shared_xaxes=True,
+    )
+    
+    for i in range(n_states):
+        
+        fig = _add_traces(fig, T, X1[:,i].reshape(-1,1), [ names[i] + left_label_postfix  ], [ is_angle[i] ], row_ofs=i+1)
+        fig = _add_traces(fig, T, X2[:,i].reshape(-1,1), [ names[i] + right_label_postfix ], [ is_angle[i] ], row_ofs=i+1)
+        
+        fig.update_yaxes(title_text=names[i], row=i+1, col=1)
+
+    fig.update_layout(height=600, width=800)
+    fig.show()
+    
