@@ -14,4 +14,10 @@ A routine for estimating the state trajectory and system parameters from input/o
 
 https://nbviewer.org/github/christianausb/controlAlgorithms/blob/main/examples/state_est_pendulum.ipynb
 
+## Pendulum motion estimation from video recordings
+
+This experiment demonstrates how to combine state and parameter estimation with a deep neural autoencoder to estimate motion trajectories from video-recordings.
+
+https://github.com/christianausb/controlAlgorithms/tree/main/examples/pendulum_finder
+
 
