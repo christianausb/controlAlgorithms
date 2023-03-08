@@ -12,3 +12,13 @@ input recording, the model learns the state trajectory and, further, the paramet
 ![pendulum_autoencoder drawio (1)](https://user-images.githubusercontent.com/4620523/223824080-464af2b7-f964-4ccb-b758-4b6aca9d6890.png)
 
 
+## Other examples
+
+### zucchini
+
+https://user-images.githubusercontent.com/4620523/223848317-058861d4-c85e-4072-9e56-b132c84695c4.mp4
+
+### leaf
+
+https://user-images.githubusercontent.com/4620523/223848454-581e0452-6f00-4c25-ad1a-0be816708260.mp4
+
