@@ -1,0 +1,7 @@
+jax_control_algorithms
+cv2
+moviepy
+tensorflow
+pandas
+numpy
+matplotlib
