@@ -4,86 +4,12 @@ from tensorflow.keras.models import Model
 
 from uncontrolled_pendulum import *
 
-def encoder_decoder_test_picture(picture_shape):
-    
-    encoder_model = tf.keras.models.Sequential([
-        tf.keras.layers.Flatten(input_shape=picture_shape),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dense(128/2, activation='relu'),
-        tf.keras.layers.Dense(128/4),
-    ], name='encoder_model')
-
-    decoder_model = tf.keras.models.Sequential([
-        # input 128/4
-        tf.keras.layers.Dense(128/2, activation='relu', name='dense_in'),
-        tf.keras.layers.Dense(128,   activation='relu'),    
-        tf.keras.layers.Dense(np.prod(picture_shape)),
-        tf.keras.layers.Reshape( picture_shape, input_shape=(np.prod(picture_shape),) )
-    ], name='decoder_model')
-    
-    # delta model
-    image_diff_to_position_delta_model = tf.keras.models.Sequential([
-        tf.keras.layers.Flatten(input_shape=picture_shape),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dense(128/2, activation='relu'),
-        tf.keras.layers.Dense(1),
-    ], name='image_to_position_delta_model')
-
-    return encoder_model, decoder_model, image_diff_to_position_delta_model
-    
-def encoder_decoder_real_picture(picture_shape):
-
-    encoder_model = tf.keras.models.Sequential([
-
-        tf.keras.layers.Conv2D(8, (3, 3), activation="relu", padding="same"),
-        tf.keras.layers.MaxPooling2D((2, 2), padding="same"),  # -1, 50, 80, 8
-
-        tf.keras.layers.Conv2D(16, (3, 3), activation="relu", padding="same"),
-        tf.keras.layers.MaxPooling2D((2, 2), padding="same"),  # output shape -1, 25, 40, 16
-
-        tf.keras.layers.Flatten(input_shape=picture_shape),
-        tf.keras.layers.Dense(128/4),
-    ], name='encoder_model')
-
-    decoder_model = tf.keras.models.Sequential([
-        # input 128/4
-        tf.keras.layers.Dense( 25 * 40 * 16  ),
-        tf.keras.layers.Reshape( ( 25, 40, 16 ) ),
-
-        tf.keras.layers.Conv2DTranspose(8, (3, 3), strides=2, activation="relu", padding="same"), #  -1, 50, 80, 8    
-        tf.keras.layers.Conv2DTranspose(16, (3, 3), strides=2, activation="relu", padding="same"), # -1, 100, 160, 3
-        tf.keras.layers.Conv2D(3, (3, 3), activation="sigmoid", padding="same")
-
-    ], name='decoder_model')
-    
-    # delta model
-    # image_diff_to_position_delta_model = tf.keras.models.Sequential([
-
-    #     tf.keras.layers.Flatten(input_shape=picture_shape),
-    #     tf.keras.layers.Dense(128, activation='relu'),
-    #     tf.keras.layers.Dense(128/2, activation='relu'),
-    #     tf.keras.layers.Dense(1),
-    # ], name='image_to_position_delta_model')
-
-    image_diff_to_position_delta_model = tf.keras.models.Sequential([
-        
-        tf.keras.layers.Conv2D(8, (3, 3), activation="relu", padding="same"),
-        tf.keras.layers.MaxPooling2D((2, 2), padding="same"),  # -1, 50, 80, 8
-
-        tf.keras.layers.Conv2D(16, (3, 3), activation="relu", padding="same"),
-        tf.keras.layers.MaxPooling2D((2, 2), padding="same"),  # output shape -1, 25, 40, 16
-
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(128/4, activation='relu'),
-        tf.keras.layers.Dense(128/8, activation='relu'),
-        tf.keras.layers.Dense(1),
-    ], name='image_to_position_delta_model')
-
-    return encoder_model, decoder_model, image_diff_to_position_delta_model
-
 
 
 def encoder_decoder_real_picture_96x160x3(picture_shape):
+    """
+        Build CNN models for encoder, decoder, and picture differences
+    """
 
     # [ [ 5*2**n, 3*2**n ] for n in range(6) ]
 
@@ -120,7 +46,7 @@ def encoder_decoder_real_picture_96x160x3(picture_shape):
     ], name='decoder_model_4CNNT_layers_128out')
         
 
-    # delta model
+    # delta model (processes the difference between two successive pictures)
     image_diff_to_position_delta_model = tf.keras.models.Sequential([
         tf.keras.layers.Conv2D(8, (3, 3), activation="relu", padding="same"), # 100, 160, 8
         tf.keras.layers.MaxPooling2D((2, 2), padding="same"),  # -1, 50, 80, 8]
@@ -143,11 +69,40 @@ def encoder_decoder_real_picture_96x160x3(picture_shape):
     return encoder_model, decoder_model, image_diff_to_position_delta_model
 
 
+
+def build_position_models_em128():
+    """
+        models that add dense layers to the CNNs to allow non-linear functions to be learned 
+        that yield the position/angle
+    """
+
+    embedding_to_position_model = tf.keras.models.Sequential([
+        # input 128
+        tf.keras.layers.Dense(128/8, activation='relu'),
+        tf.keras.layers.Dense(128/16, activation='relu'),
+        tf.keras.layers.Dense(1),
+    ], name='embedding_to_position_model')
+
+    position_to_embedding_model = tf.keras.models.Sequential([
+        # input 1
+        tf.keras.layers.Dense(128/16),
+        tf.keras.layers.Dense(128/8, activation='relu'),
+        tf.keras.layers.Dense(128, activation='relu'),
+    ], name='position_to_embedding_model')
+
+    return embedding_to_position_model, position_to_embedding_model
+
+
+
+
 #
 # General autoencoder
 #
 
 class SeqAutoencoder(Model):
+    """
+        autoencoder that does *not* use a physical model
+    """
     def __init__(self, encoder_model, decoder_model, embedding_model, n_y_additional=1, regularization_factor=1.0, name=None):
         
         super(SeqAutoencoder, self).__init__()
@@ -195,296 +150,8 @@ class SeqAutoencoder(Model):
     
 
 #
-# Position autoencoder
-#
-
-def build_position_models():
-
-    embedding_to_position_model = tf.keras.models.Sequential([
-        # input 128/4
-        tf.keras.layers.Dense(128/8, activation='relu'),
-        tf.keras.layers.Dense(128/16, activation='relu'),
-        tf.keras.layers.Dense(1),
-    ], name='embedding_to_position_model')
-
-    position_to_embedding_model = tf.keras.models.Sequential([
-        # input 1
-        tf.keras.layers.Dense(128/16),
-        tf.keras.layers.Dense(128/8, activation='relu'),
-        tf.keras.layers.Dense(128/4, activation='relu'),
-    ], name='position_to_embedding_model')
-
-    return embedding_to_position_model, position_to_embedding_model
-
-
-def build_position_models_em128():
-
-    embedding_to_position_model = tf.keras.models.Sequential([
-        # input 128
-        tf.keras.layers.Dense(128/8, activation='relu'),
-        tf.keras.layers.Dense(128/16, activation='relu'),
-        tf.keras.layers.Dense(1),
-    ], name='embedding_to_position_model')
-
-    position_to_embedding_model = tf.keras.models.Sequential([
-        # input 1
-        tf.keras.layers.Dense(128/16),
-        tf.keras.layers.Dense(128/8, activation='relu'),
-        tf.keras.layers.Dense(128, activation='relu'),
-    ], name='position_to_embedding_model')
-
-    return embedding_to_position_model, position_to_embedding_model
-
-
-
-
-class NarrowDeltaAutoencoder(Model):
-    def __init__(
-        self, 
-        encoder_model, decoder_model, 
-        embedding_to_position_model, position_to_embedding_model, 
-        image_diff_to_position_delta_model,
-        name=None
-    ):
-        
-        super(NarrowDeltaAutoencoder, self).__init__()
-        
-        self.encoder_model = encoder_model
-        self.decoder_model = decoder_model        
-        self.embedding_to_position_model = embedding_to_position_model
-        self.position_to_embedding_model = position_to_embedding_model
-        self.image_diff_to_position_delta_model = image_diff_to_position_delta_model
-                
-        self.regularization_factor = 1.0
-        self.internal_Y_measurement_level = 1.0
-        self.internal_Y_measurement_variance = 0.2
-        
-      
-    def call(self, x_img_seq):
-        
-        def body(x_img_seq):        
-                
-            #
-            # auto encoder model
-            #
-            
-            # encode path
-            embedding = self.encoder_model(x_img_seq)
-            Y_measurement = self.embedding_to_position_model(embedding) # Y_measurement : (n_steps, 1)
-                                    
-            # decode path
-            embedding_ = self.position_to_embedding_model(Y_measurement)
-            img_seq_dec = self.decoder_model(embedding_)
-            
-            #
-            # analytics on the encoder signals
-            #
-            
-            # compute differences between respectively two pictures 
-            x_img_seq_diff = tf.experimental.numpy.diff(x_img_seq, axis=0)
-            
-            # use delta picture to compute an estimate of the movement velocity
-            Y_dot_measurement = self.image_diff_to_position_delta_model( x_img_seq_diff )[:,0]
-        
-            # differentiate the measured position
-            Y_dot_measurement_by_diff    = tf.experimental.numpy.diff( Y_measurement[:,0], axis=0 )
-            Y_dotdot_measurement_by_diff = tf.experimental.numpy.diff( Y_dot_measurement_by_diff, axis=0 )
-
-            # velocity residual 
-            e_delta = Y_dot_measurement_by_diff - Y_dot_measurement
-            
-            #
-            # regularization
-            #
-            
-            # put constraint for desired mean of position measurement
-            Y_measurement_level = tf.reduce_mean( Y_measurement ) 
-            J_measurement_level = (self.internal_Y_measurement_level - Y_measurement_level)**2
-        
-            # put constraint for desired variance of position measurement
-            J_measurement_variance = ( self.internal_Y_measurement_variance - tf.math.reduce_variance(Y_measurement) )**2
-    
-            # apply cost to the noise-level derivatives of the measured position
-            J_diff  = tf.reduce_mean(Y_dot_measurement_by_diff**2)
-            J_diff2 = tf.reduce_mean(Y_dotdot_measurement_by_diff**2)
-            
-            # cost for residual velocity residual
-            J_velocity_residual = tf.losses.MeanSquaredError()(Y_dot_measurement_by_diff, Y_dot_measurement)
-            
-            # build combined cost
-            J_star = (
-                1   * J_measurement_level +
-                1   * J_measurement_variance +
-                100 * J_diff + 
-                100 * J_diff2 + 
-                1   * J_velocity_residual
-            )
-                        
-            return img_seq_dec, J_star, Y_measurement, Y_dot_measurement, e_delta
-            
-        
-        # map the model over the batch axis
-        img_seq_dec, J_star_, Y_measurement, Y_dot_measurement, e_delta = tf.map_fn(
-            body, x_img_seq,
-            dtype=( tf.float32, tf.float32, tf.float32, tf.float32, tf.float32) # need to specify datatype for multi-output mapping
-        )
-        
-        # apply regularization cost
-        self.add_loss( self.regularization_factor * tf.reduce_mean(J_star_) )
-
-        return img_seq_dec, J_star_, Y_measurement - self.internal_Y_measurement_level, Y_dot_measurement, e_delta
-    
-    
-
-class PendulumEstimationAutoencoder(Model):
-    """
-        A model that wraps an NarrowDeltaAutoencoder and adds a physical model of
-        a pendulum as a regularizing constraint.
-    """
-    def __init__(
-        self, 
-        narrow_autoencoder : NarrowDeltaAutoencoder,
-        wy, wx1, wx2,
-        regularization_factor = 100.0,
-        max_time=3.0, dt=0.01,
-        n_experiments = 1,
-        name=None
-    ):
-        
-        super(PendulumEstimationAutoencoder, self).__init__()
-        
-        self.n_experiments = n_experiments # =training batch size
-        self.narrow_autoencoder = narrow_autoencoder
-        
-        n_steps = get_n_steps(max_time, dt)
-        self.n_steps = n_steps
-        self.max_time = max_time
-        self.dt = dt
-        
-        self.wy = wy
-        self.wx1 = wx1
-        self.wx2 = wx2 
-        
-        self.pendulum_estimation_objective = build_pendulum_model_estimate_objective_tf_function(
-            wy, wx1, wx2,
-            max_time, dt
-        )
-        
-        # pendulum parameters (theta) for each batch, respectively
-        self.theta_0 = tf.Variable( # a
-            4.0 * tf.ones( (n_experiments), dtype=tf.float32 ),
-            trainable=True
-        )
-        self.theta_1 = tf.Variable( # friction
-            0.0 * tf.ones( (n_experiments), dtype=tf.float32 ),
-            trainable=True
-        )
-        self.theta_2 = tf.Variable( # y_ofs
-            0.0 * tf.ones( (n_experiments), dtype=tf.float32 ),
-            trainable=True
-        )
-        
-        # estimated states (X) for each batch, respectively
-        self.X_hat = tf.Variable(
-            0.0 * tf.ones( (n_experiments, n_steps, 2), dtype=tf.float32 ),
-            trainable=True
-        )
-        
-        self.regularization_factor = regularization_factor
-
-        
-      
-    def call(self, x_img_seq):
-
-        # encode/decode path
-        img_seq_dec, J_star_, Y_measurement, Y_dot_measurement, e_delta = self.narrow_autoencoder( x_img_seq )
-        
-        def body(x):
-            Y_measurement, theta_hat, X_hat = x
-                
-            #
-            # Pendulum estimation
-            #
-                        
-            J_pendulum_fit = self.pendulum_estimation_objective(
-                Y_measurement, X_hat,
-                theta_hat, 
-                tf.constant(3.0, dtype=tf.float32),
-            )
-            
-            # put constraint on friction (constrains the learned system to be stable) 
-            b = theta_hat[1] # should be >0 for a stable system
-            J_stability = tf.maximum( -b, 0 )
-                        
-            # build combined cost
-            J = (
-                1.0   * J_pendulum_fit +
-                10.0  * J_stability
-            )
-                        
-            return J, X_hat, theta_hat, J_pendulum_fit
-
-                
-                
-        thata_hat = tf.stack( (self.theta_0, self.theta_1, self.theta_2), axis=1 )    
-        
-        # map the model over the batch axis
-        J_pendulum_fit_, X_hat, theta_hat, J_pendulum_fit = tf.map_fn(
-            body, ( Y_measurement, thata_hat, self.X_hat, ),
-            dtype=( tf.float32, tf.float32, tf.float32, tf.float32, ) # need to specify datatype for multi-output mapping
-        )
-        
-        J_pendulum_fit = self.regularization_factor * J_pendulum_fit_
-        
-        # apply regularization cost
-        self.add_loss( tf.reduce_mean(J_pendulum_fit) )
-
-        return (
-            img_seq_dec, J_star_, Y_measurement, Y_dot_measurement, e_delta,  # output signals from narrow_autoencoder
-            X_hat, theta_hat, J_pendulum_fit # additional signals by this module
-        )
-
-
-def build_physically_informed_model(
-    wy = 1.0, wx1 = 100.0, wx2 = 100.0, regularization_factor = 1.0,
-    picture_shape = None,
-    max_time=None, dt=None
-):
-
-    # picture CNN models
-    encoder_model, decoder_model, image_diff_to_position_delta_model = encoder_decoder_real_picture_96x160x3(picture_shape)
-
-    # non-linear functions
-    embedding_to_position_model, position_to_embedding_model = build_position_models_em128()
-
-    # picture autoencoder
-    narrow_delta_autoencoder = NarrowDeltaAutoencoder(
-            encoder_model, decoder_model, 
-            embedding_to_position_model, position_to_embedding_model, 
-            image_diff_to_position_delta_model
-    )
-
-    # regularization by physical pendulum model
-    pe_autoencoder = PendulumEstimationAutoencoder(
-        narrow_delta_autoencoder,
-        wy = wy, 
-        wx1 = wx1,
-        wx2 = wx2,
-        regularization_factor = regularization_factor,
-        max_time = max_time, dt = dt,
-        n_experiments = 1,
-        name='pe_autoencoder',
-    )
-    
-    return pe_autoencoder
-
-
-
 #
 #
-#
-
-
 
 def build_R_sq_tf_function(n_steps : int):
     """
@@ -502,7 +169,6 @@ def build_R_sq_tf_function(n_steps : int):
         )
         
         return R_sq, dB_R_sq
-#        return R_sq.astype(jnp.float32), dB_R_sq.astype(jnp.float32)
 
 
     tf_fn = tf.function(
@@ -523,6 +189,10 @@ def build_R_sq_tf_function(n_steps : int):
 
 
 class WeightController(Model):
+    """
+        Controller that manipulates a parameter during training
+        Also records internal training metrics into a tensor variable.
+    """
     def __init__(
         self, 
         lambda_init = 1.5,
@@ -840,11 +510,14 @@ def build_physically_informed_model2(
 
     wy1 = 1.0, wy2 = 1.0, wx1 = 100.0, wx2 = 100.0,
 
-    lambda_exp = 1.5,
+    lambda_exp = 0.0,  # set this to 0.0 to deactivate the controller during training
 
     picture_shape = None,
     max_time=None, dt=None
 ):
+    """
+        function thats sets-up the entire model for detecting pendulums
+    """
 
     # picture CNN models
     encoder_model, decoder_model, image_diff_to_position_delta_model = encoder_decoder_real_picture_96x160x3(picture_shape)
