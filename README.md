@@ -1,6 +1,9 @@
 # controlAlgorithms
 Algorithms at the boundary of control and machine learning
 
+![test drawio](https://user-images.githubusercontent.com/4620523/233860796-e78faaea-1c2d-4d83-ac42-0f8c7bdc9e59.png)
+
+
 # Contents
 
 ## System identification
@@ -19,5 +22,6 @@ https://nbviewer.org/github/christianausb/controlAlgorithms/blob/main/examples/s
 This experiment demonstrates how to combine state and parameter estimation with a deep neural autoencoder to estimate motion trajectories from video-recordings.
 
 https://github.com/christianausb/controlAlgorithms/tree/main/examples/pendulum_finder
+
 
 
