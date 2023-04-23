@@ -11,8 +11,7 @@ This set-up was inspired by https://youtu.be/WHhDgxkiR9c [1].
 
 ## Architecture 
 
-![pendulum_autoencoder drawio (1)](https://user-images.githubusercontent.com/4620523/223824080-464af2b7-f964-4ccb-b758-4b6aca9d6890.png)
-
+![pendulum_autoencoder drawio (3)](https://user-images.githubusercontent.com/4620523/233862854-f6ceaee8-b944-44ef-a992-3151ffe86753.png)
 
 ## Other examples
 
