@@ -1,8 +1,7 @@
 # controlAlgorithms
 Algorithms at the boundary of control and machine learning
 
-![test drawio](https://user-images.githubusercontent.com/4620523/233860796-e78faaea-1c2d-4d83-ac42-0f8c7bdc9e59.png)
-
+![image](https://user-images.githubusercontent.com/4620523/236238763-343d0862-9265-464a-9208-35ea90b268fd.png)
 
 # Contents
 
