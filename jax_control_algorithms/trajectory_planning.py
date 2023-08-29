@@ -7,37 +7,10 @@ import jaxopt
 
 from functools import partial
 import math
+from jax_control_algorithms.common import *
 
-jax.config.update('jax_enable_x64', True)
+#jax.config.update('jax_enable_x64', True)
 
-
-# doublicate: also in estimation.py
-def vectorize_g(g):
-    """ 
-        vectorize the output function g(x, u, t, theta)
-    """
-    return jax.vmap( g, in_axes=(0, 0, 0, None) )
-
-def vectorize_f(f):
-    """ 
-        vectorize the output function g(x, u, t, theta)
-    """
-    return jax.vmap( f, in_axes=(0, 0, 0, None) )
-
-def eval_X_next(f, X, U, T, theta):
-
-    # vectorize the transition function f(x, u, t, theta)
-    f_vec = vectorize_f(f)
-
-    # step forward through transition function x_next( i ) = f( x(i), u(i), t(i), theta ) for all i
-    X_next = f_vec( X, U, T, theta )
-
-    return X_next
-
-
-#
-#
-#
 
 
 
@@ -432,7 +405,7 @@ def plan_trajectory(
     metric_c_ineq_final = trace[1][n_iter-1]
     
     is_converged = jnp.logical_and(
-        metric_c_eq_final < eq_tol,
+        metric_c_eq_final   < eq_tol,
         metric_c_ineq_final < neq_tol
     )
         
@@ -451,27 +424,25 @@ def plan_trajectory(
 
 
 class Solver:
-    def __init__(self, problem_def_fn, dscr_fn = None):
+    def __init__(self, problem_def_fn):
         self.problem_def_fn = problem_def_fn
         
         (
-            self.f_, self.g, self.running_cost, 
+            self.f, self.g, self.running_cost, 
             self.terminal_state_eq_constraints, self.inequ_constraints, 
             self.theta, self.x0, self.make_guess
         ) = problem_def_fn()
-        
-        if dscr_fn is not None:
-            self.f = dscr_fn(self.f_)
-        else:
-            self.f = self.f_
+                
+        self.c_eq_penality = 100
+        self.opt_t_init    = 0.5 
         
         # get n_steps
-        X_guess, _ = self.make_guess()
+        X_guess, _   = self.make_guess(self.x0, self.theta)
         self.n_steps = X_guess.shape[0]
         
     def run(self):
         
-        X_guess, U_guess = self.make_guess()
+        X_guess, U_guess = self.make_guess(self.x0, self.theta)
         # run
         
         return plan_trajectory(
@@ -481,11 +452,11 @@ class Solver:
             self.inequ_constraints,
             self.running_cost,
             self.x0,
-            X_guess=X_guess,
-            U_guess=U_guess, 
-            theta=self.theta,
-#            c_eq_penality = 100,
-#            opt_t_init = 10.0, #0.5,
+            X_guess       = X_guess,
+            U_guess       = U_guess, 
+            theta         = self.theta,
+            c_eq_penality = self.c_eq_penality,
+            opt_t_init    = self.opt_t_init,
         )
 
 def unpack_res(res):
