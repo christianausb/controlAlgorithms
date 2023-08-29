@@ -1,6 +1,19 @@
 [build-system]
 requires = [
     "setuptools>=61.0",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax_control_algorithms"
+version = "0.1.0"
+authors = [
+  { name="Christian Klauer", email="chr.klauer@gmail.com" },
+]
+description = "Algorithms for state estimation, control, and system identification in JAX"
+readme = "README.md"
+
+dependencies = [
     "numpy",
     "pandas",
     "jax",
@@ -8,17 +21,8 @@ requires = [
     "plotly",
     "matplotlib"
 ]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "jax_control_algorithms"
-version = "0.0.1"
-authors = [
-  { name="Christian Klauer", email="chr.klauer@gmail.com" },
-]
-description = "Algorithms for state estimation, control, and system identification in JAX"
-readme = "README.md"
 requires-python = ">=3.7"
+
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
