@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "setuptools>=61.0",
+    "testbook",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -19,7 +20,8 @@ dependencies = [
     "jax",
     "jaxopt",
     "plotly",
-    "matplotlib"
+    "matplotlib",
+    "ipywidgets",
 ]
 requires-python = ">=3.7"
 
