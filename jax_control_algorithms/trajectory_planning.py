@@ -9,6 +9,8 @@ from functools import partial
 import math
 from jax_control_algorithms.common import *
 
+import time
+
 #jax.config.update('jax_enable_x64', True)
 
 
@@ -183,7 +185,7 @@ def feasibility_metric_penality_method(variables, parameters, static_parameters 
     return __feasibility_metric_penality_method(variables, parameters, static_parameters )
 
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, ) )
+@partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11 ) )
 def plan_trajectory(
     f, 
     g,
@@ -196,19 +198,25 @@ def plan_trajectory(
     U_guess, 
     theta,
     
+    max_iter_boundary_method = 40,
+    max_iter_inner = 5000,
+    verbose = True,
+    
     c_eq_penality = 100.0,
     opt_t_init = 0.5,
     lam = 1.6,
     
     eq_tol  = 0.0001,
     neq_tol = 0.0001,
-    max_iter_boundary_method = 40,
-    verbose = True,
+    tol_inner = 0.0001,
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
         
         Args:
+        
+            -- callback functions that describe the problem to solve --
+            
             f: 
                 the discrete-time system function with the prototype x_next = f(x, u, k, theta)
                 - x: (n_states, )     the state vector
@@ -231,6 +239,9 @@ def plan_trajectory(
                 
                 A fulfilled constraint is indicated by a the value c_neq[] >= 0.
                 
+                
+            -- dynamic parameters (jax values) --
+                
             x0:
                 a vector containing the initial state of the system described by f
             
@@ -243,14 +254,39 @@ def plan_trajectory(
             theta: (JAX-pytree)
                 parameters to the system model that are forwarded to f, g, cost_fn
                         
+                        
+            -- static parameters (no jax datatypes) --
+            
+            max_iter_boundary_method: int
+                The maximum number of iterations to apply the boundary method.
+                
+            max_iter_inner: int
+                xxx
+                
+            verbose: bool
+                If true print some information on the solution process
+
+            
+            -- solver settings (can be jax datatypes) --
+            
+            c_eq_penality: float
+                xxx
+                
+            opt_t_init: float
+                xxx
+                
+            lam: float
+                xxx
+                        
             eq_tol: float
                 tolerance to maximal error of the equality constraints
                 
             neq_tol: float
                 tolerance to maximal error of the inequality constraints
+                
+            tol_inner: float
+                xxx
             
-            max_iter_boundary_method: int
-                The maximum number of iterations to apply the boundary method.
             
             
         
@@ -261,7 +297,7 @@ def plan_trajectory(
             system_outputs: 
                 The return value of the function g evaluated for X_opt, U_opt
             
-            res: solver-internal information
+            res: solver-internal information that can be unpacked with unpack_res()
             
     """
     
@@ -280,9 +316,12 @@ def plan_trajectory(
     assert X_guess.shape[0] == n_steps
     assert X_guess.shape[1] == n_states
     
+    assert type(max_iter_boundary_method) is int
+    
     #
-    jax.debug.print("👉 solving problem with n_horizon={n_steps}, n_states={n_states} n_inputs={n_inputs}", 
-                    n_steps=n_steps, n_states=n_states, n_inputs=n_inputs)
+    if verbose:
+        jax.debug.print("👉 solving problem with n_horizon={n_steps}, n_states={n_states} n_inputs={n_inputs}", 
+                        n_steps=n_steps, n_states=n_states, n_inputs=n_inputs)
     
     # index vector
     K = jnp.arange(n_steps)
@@ -304,19 +343,19 @@ def plan_trajectory(
     
     # trace vars
     trace_init = ( 
-        math.nan*jnp.zeros(max_iter_boundary_method), 
+        math.nan*jnp.zeros(max_iter_boundary_method),
         math.nan*jnp.zeros(max_iter_boundary_method), 
         -jnp.ones(max_iter_boundary_method, dtype=jnp.int32), 
     )
     
     def loop_body(X):
-        _, variables, parameters, opt_t, i, trace = X
+        _, variables, parameters, opt_t, i, trace, tol_inner = X
             
         #
         parameters_ = parameters + ( opt_t, )
 
         # run optimization
-        gd = jaxopt.BFGS(fun=objective_, value_and_grad=False, tol=0.0001, maxiter=5000)
+        gd = jaxopt.BFGS(fun=objective_, value_and_grad=False, tol=tol_inner, maxiter=max_iter_inner)
         res = gd.run(variables, parameters=parameters_)
         variables_star = res.params
         n_iter_inner = res.state.iter_num
@@ -353,11 +392,11 @@ def plan_trajectory(
         
             lax.cond(is_finished, lambda : jax.debug.print("✅ found feasible solution"), lambda : None)
         
-        return ( is_finished, variables_star, parameters, opt_t * lam, i+1, trace_next )
+        return ( is_finished, variables_star, parameters, opt_t * lam, i+1, trace_next, tol_inner )
     
     def loop_cond(X):
         
-        is_finished, variables_star, _, _, i, trace = X
+        is_finished, variables_star, _, _, i, trace, _ = X
         
         is_X_finite = jnp.isfinite(variables_star[0]).all()
         is_n_iter_not_reaced = i < max_iter_boundary_method
@@ -383,9 +422,9 @@ def plan_trajectory(
         
     
     # loop
-    X = ( jnp.array(False, dtype=jnp.bool_), variables, parameters, opt_t, 0, trace_init ) # pack
+    X = ( jnp.array(False, dtype=jnp.bool_), variables, parameters, opt_t, 0, trace_init, tol_inner ) # pack
     X = lax.while_loop( loop_cond, loop_body, X ) # loop
-    _, variables_star, parameters, opt_t, n_iter, trace = X # unpack
+    _, variables_star, parameters, opt_t, n_iter, trace, _ = X # unpack
     
     # unpack results for optimized variables
     X_opt, U_opt = variables_star
@@ -423,8 +462,9 @@ def plan_trajectory(
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
 
 
+
 class Solver:
-    def __init__(self, problem_def_fn):
+    def __init__(self, problem_def_fn, use_continuation=False):
         self.problem_def_fn = problem_def_fn
         
         (
@@ -432,32 +472,70 @@ class Solver:
             self.terminal_state_eq_constraints, self.inequ_constraints, 
             self.theta, self.x0, self.make_guess
         ) = problem_def_fn()
+
+        self.max_iter_boundary_method = 40
+        self.max_iter_inner = 5000
+        self.verbose = True
                 
         self.c_eq_penality = 100
-        self.opt_t_init    = 0.5 
+        self.opt_t_init    = 0.5
+        self.lam = 1.6
+
+        self.eq_tol  = 0.0001
+        self.neq_tol = 0.0001
+        
+        self.tol_inner = 0.0001
         
         # get n_steps
         X_guess, _   = self.make_guess(self.x0, self.theta)
         self.n_steps = X_guess.shape[0]
         
+        # make memory for guess
+        self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
+        
+        self.use_continuation = use_continuation
+        
     def run(self):
         
-        X_guess, U_guess = self.make_guess(self.x0, self.theta)
         # run
+        if not self.use_continuation:
+            self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
         
-        return plan_trajectory(
+        start_time = time.time()
+        solver_return = plan_trajectory(
             self.f, 
             self.g,
             self.terminal_state_eq_constraints,
             self.inequ_constraints,
             self.running_cost,
             self.x0,
-            X_guess       = X_guess,
-            U_guess       = U_guess, 
+            
+            X_guess       = self.X_guess,
+            U_guess       = self.U_guess, 
             theta         = self.theta,
+            
+            max_iter_boundary_method = self.max_iter_boundary_method,
+            max_iter_inner           = self.max_iter_inner,
+            verbose                  = self.verbose,
+            
             c_eq_penality = self.c_eq_penality,
             opt_t_init    = self.opt_t_init,
+            lam           = self.lam,
+            eq_tol        = self.eq_tol,
+            neq_tol       = self.neq_tol,
+            tol_inner     = self.tol_inner,
         )
+        end_time = time.time()
+        elapsed = end_time - start_time
+        print(f"Execution time: {elapsed} seconds")
+        
+        X_opt, U_opt, system_outputs, res = solver_return
+        
+        self.X_guess = X_opt[1:]
+        self.U_guess = U_opt
+        
+        return solver_return
+    
 
 def unpack_res(res):
     """
