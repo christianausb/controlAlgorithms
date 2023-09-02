@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import jaxopt
 
 from functools import partial
+from inspect import signature
 import math
 from jax_control_algorithms.common import *
 
@@ -74,7 +75,7 @@ def print_if_nonfinite(text : str, x):
 
     lax.cond(is_finite, true_fn, false_fn, x)
     
-def print_if_outofbounds(text : str, x, x_min, x_max):
+def print_if_outofbounds(text : str, x, x_min, x_max, var_to_also_print=None):
     is_oob = jnp.logical_and(
         jnp.all( x > x_min ),
         jnp.all( x < x_max ),        
@@ -85,16 +86,19 @@ def print_if_outofbounds(text : str, x, x_min, x_max):
     def false_fn(x):
         # jax.debug.breakpoint()
         jax.debug.print(text, x=x)
+        if var_to_also_print is not None:
+            jax.debug.print('var_to_also_print={x}', x=var_to_also_print)
 
     lax.cond(is_oob, true_fn, false_fn, x)
     
-    
+     
+
 
 #
 # routine for state estimation and parameter identification
 #
 
-def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0, theta):
+def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0, theta, power):
     """
     algebraic constraints for the system dynamics
     """
@@ -104,13 +108,24 @@ def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0,
     X_next = eval_X_next(f, X[:-1], U_opt_var, K, theta)
 
     # compute c_eq( i ) = x( i+1 ) - x_next( i ) for all i
-    c_eq_running = X[1:] - X_next
+    c_eq_running =  jnp.exp2(power) * X[1:] -  jnp.exp2(power) * X_next
 
     if terminal_state_eq_constraints is not None:
         # terminal constraints are defined
         x_terminal = X_opt_var[-1]
-        c_eq_terminal = terminal_state_eq_constraints(x_terminal, theta)
-                        
+        
+        
+        number_parameters_to_terminal_fn =len( signature( terminal_state_eq_constraints ).parameters )
+        if number_parameters_to_terminal_fn == 2:
+            # the constraint function implements the power parameter
+            
+            c_eq_terminal = jnp.exp2(power) * terminal_state_eq_constraints(x_terminal, theta)
+            
+        elif number_parameters_to_terminal_fn == 3:
+            
+            c_eq_terminal = terminal_state_eq_constraints(x_terminal, theta, power)
+        
+        
         # total
         c_eq = jnp.vstack( (c_eq_running, c_eq_terminal) )
     else:
@@ -142,24 +157,59 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
+    
+    #
+
+    OPTION = 'A'
+
+    if OPTION in ['A', 'B']:
+        power = 0
+    elif OPTION in ['C', 'D']:
+        power = 10
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta).reshape(-1)
+    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, power).reshape(-1)
     c_ineq = inequ_constraints(X, U, K, theta).reshape(-1)        
 
     # equality constraints using penality method
-    #c_eq_penality = 100 * opt_t
-    J1 = c_eq_penality * opt_t * jnp.mean(
-        ( c_eq.reshape(-1) )**2
-    )
     
-    J2 = cost_fn(f, running_cost, X, U, K, theta)
+    if OPTION == 'A':
+        J1_A = c_eq_penality * opt_t * jnp.mean(
+            ( c_eq.reshape(-1) )**2
+        )
+        J_equality_costs = J1_A
     
-    J3 = jnp.mean(
+    if OPTION == 'B':
+        opt_t_sqrt = jnp.sqrt(opt_t)
+        J1_B = c_eq_penality * jnp.mean(
+            ( opt_t_sqrt * c_eq.reshape(-1) )**2
+        )
+        J_equality_costs = J1_B
+    
+    if OPTION == 'C':
+        J1_C = c_eq_penality/jnp.exp2(power)**2 * opt_t * jnp.mean(
+            ( c_eq.reshape(-1) )**2
+        )
+        J_equality_costs = J1_C
+    
+    if OPTION == 'D':
+        a = c_eq.reshape(-1)
+        J1_D = c_eq_penality/jnp.exp2(power)**2 * opt_t * jax.numpy.linalg.norm( a, 2 )**2 / a.shape[0]
+        J_equality_costs = J1_D
+
+#    print_if_outofbounds('WARN; J1_A - J1_B = {x}', J1_A - J1_B, -0.00001, 0.00001)
+   # print_if_outofbounds('WARN: J1_A - J1_B = {x}', J1_A - J1_B,       -0.001, 0.001, {'opt_t': opt_t, 'opt_t_sqrt': opt_t_sqrt, 'c_eq': c_eq} )
+
+    # CHOICE
+    #
+        
+    J_cost_function = cost_fn(f, running_cost, X, U, K, theta)
+    
+    J_boundary_costs = jnp.mean(
         boundary_fn(c_ineq, opt_t, 11, False)
     )
     
-    return J1 + J2 + J3, c_eq
+    return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
 
 
 def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
@@ -169,7 +219,7 @@ def __feasibility_metric_penality_method(variables, parameters, static_parameter
     X, U                                                              = variables
     
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, I, x0, theta)
+    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, I, x0, theta, 0)
     c_ineq = inequ_constraints(X, U, I, theta)
     
     #
@@ -183,6 +233,7 @@ def objective_penality_method( variables, parameters, static_parameters ):
 
 def feasibility_metric_penality_method(variables, parameters, static_parameters ):
     return __feasibility_metric_penality_method(variables, parameters, static_parameters )
+
 
 
 @partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11 ) )
@@ -231,7 +282,7 @@ def plan_trajectory(
                 function to evaluate the terminal constraints
 
             running_cost: 
-                funtion to evaluate the running costs J = running_cost(x, u, t, theta)
+                function to evaluate the running costs J = running_cost(x, u, t, theta)
                 
             inequ_constraints: 
                 a function to evaluate the inequality constraints and prototype 
@@ -279,17 +330,15 @@ def plan_trajectory(
                 xxx
                         
             eq_tol: float
-                tolerance to maximal error of the equality constraints
+                tolerance to maximal error of the equality constraints (maximal absolute error)
                 
             neq_tol: float
                 tolerance to maximal error of the inequality constraints
                 
             tol_inner: float
-                xxx
+                tolerance passed to the inner solver
             
             
-            
-        
         Returns: X_opt, U_opt, system_outputs, res
             X_opt: the optimized state trajectory
             U_opt: the optimized control sequence
@@ -335,6 +384,13 @@ def plan_trajectory(
     objective_ = partial(objective_penality_method, static_parameters=static_parameters)
     feasibility_metric_ = partial(feasibility_metric_penality_method, static_parameters=static_parameters)
     
+
+
+
+
+
+
+
     #
     # loop opt_t_init -> opt_t, opt_t = opt_t * 0.xx
     #
@@ -426,13 +482,20 @@ def plan_trajectory(
     X = lax.while_loop( loop_cond, loop_body, X ) # loop
     _, variables_star, parameters, opt_t, n_iter, trace, _ = X # unpack
     
+
     # unpack results for optimized variables
     X_opt, U_opt = variables_star
     
     # evaluate the constraint functions one last time to return the residuals 
-    c_eq   = eq_constraint(f, terminal_state_eq_constraints, X_opt, U_opt, K, x0, theta)
+    c_eq   = eq_constraint(f, terminal_state_eq_constraints, X_opt, U_opt, K, x0, theta, 0)
     c_ineq = inequ_constraints(X_opt, U_opt, K, theta)
     
+
+
+
+
+
+
     # compute systems outputs for the optimized trajectory
     system_outputs = None
     if g is not None:
@@ -460,6 +523,7 @@ def plan_trajectory(
     }
 
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
+
 
 
 
