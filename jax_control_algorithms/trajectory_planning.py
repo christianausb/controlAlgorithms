@@ -216,7 +216,7 @@ def __objective_penality_method( variables, parameters, static_parameters ):
 
 def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
     
-    K, theta, c_eq_penality, x0, opt_t                                = parameters
+    K, theta, c_eq_penality, x0                                       = parameters
     f, terminal_state_eq_constraints, inequ_constraints, running_cost = static_parameters
     X, U                                                              = variables
     
@@ -238,23 +238,48 @@ def feasibility_metric_penality_method(variables, parameters, static_parameters 
 
 
 
-@dataclass
-class Person():
-    name: str
-    age: int
-    height: float
-    email: str
+def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, eq_tol, neq_tol, verbose : bool):
+    
+    trace, _, = verification_state
+
+    # verify step
+    max_eq_error, max_ineq_error = feasibility_metric_fn(variables, parameters)
+    n_iter_inner = res_inner.state.iter_num
+    
+    # verify metrics and check for convergence
+    is_converged = jnp.logical_and(
+        max_eq_error   < eq_tol,
+        max_ineq_error < neq_tol
+    )
+    
+    # trace
+    trace_next = ( 
+        trace[0].at[i].set(max_eq_error),
+        trace[1].at[i].set(max_ineq_error),
+        trace[2].at[i].set(n_iter_inner),
+    )
+
+    is_abort, i_best = None, None
+
+    if verbose:
+        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt={opt_t} \t  eq={max_eq_error} \t neq={max_ineq_error}", 
+                        i=i,    opt_t = jnp.round(opt_t, decimals=2),  
+                        max_eq_error   = jnp.round(max_eq_error, decimals=5), 
+                        max_ineq_error = jnp.round(max_ineq_error, decimals=5),
+                        n_iter_inner  = n_iter_inner )
+            
+    return ( trace, is_converged, ), is_converged, is_abort, i_best
 
 def _plan_trajectory( 
-        i, variables, parameters, opt_t, trace_init, lam,
-        tol_inner, max_iter_boundary_method, eq_tol, neq_tol,
-        max_iter_inner, objective_, feasibility_metric_,
+        i, variables, parameters, opt_t, verification_state_init, lam,
+        tol_inner, max_iter_boundary_method,
+        max_iter_inner, objective_fn, verification_fn,
         verbose, target_dtype
     ):
 
     # convert dtypes
-    ( variables, parameters, opt_t, trace_init, lam, tol_inner, eq_tol, neq_tol, ) = _convert_dtype(
-        ( variables, parameters, opt_t, trace_init, lam, tol_inner, eq_tol, neq_tol, ),
+    ( variables, parameters, opt_t, verification_state_init, lam, tol_inner, ) = _convert_dtype(
+        ( variables, parameters, opt_t, verification_state_init, lam, tol_inner, ),
         target_dtype
     )
 
@@ -263,54 +288,27 @@ def _plan_trajectory(
     #
     
     def loop_body(X):
-        _, variables, parameters, opt_t, i, trace, tol_inner = X
+        _, variables, parameters, opt_t, i, verification_state, tol_inner = X
             
         #
         parameters_ = parameters + ( opt_t, )
 
         # run optimization
-        gd = jaxopt.BFGS(fun=objective_, value_and_grad=False, tol=tol_inner, maxiter=max_iter_inner)
+        gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=tol_inner, maxiter=max_iter_inner)
         res = gd.run(variables, parameters=parameters_)
         variables_star = res.params
-        n_iter_inner = res.state.iter_num
+
+        # run callback
+        verification_state, is_finished, is_abort, i_best = verification_fn(verification_state, i, res, variables_star, parameters, opt_t)
         
-        if False:
-            jax.debug.print(
-                "n_iter_inner={n_iter_inner} variables_star={variables_star}", 
-                n_iter_inner=n_iter_inner,
-                variables_star=variables_star,
-            )
-        
-        # verify step
-        metric_c_eq, metric_c_ineq = feasibility_metric_(variables_star, parameters_)
-        
-        # verify metrics and check for convergence
-        is_finished = jnp.logical_and(
-            metric_c_eq   < eq_tol,
-            metric_c_ineq < neq_tol
-        )
-        
-        # trace
-        trace_next = ( 
-            trace[0].at[i].set(metric_c_eq),
-            trace[1].at[i].set(metric_c_ineq),
-            trace[2].at[i].set(n_iter_inner),
-        )
-        
-        if verbose:
-            jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt={opt_t} \t  eq={metric_c_eq} \t neq={metric_c_ineq}", 
-                            i=i,    opt_t = jnp.round(opt_t, decimals=2),  
-                            metric_c_eq   = jnp.round(metric_c_eq, decimals=5), 
-                            metric_c_ineq = jnp.round(metric_c_ineq, decimals=5),
-                            n_iter_inner  = n_iter_inner ) # ↪
-        
+        if verbose:        
             lax.cond(is_finished, lambda : jax.debug.print("✅ found feasible solution"), lambda : None)
         
-        return ( is_finished, variables_star, parameters, opt_t * lam, i+1, trace_next, tol_inner )
+        return ( is_finished, variables_star, parameters, opt_t * lam, i+1, verification_state, tol_inner )
     
     def loop_cond(X):
         
-        is_finished, variables_star, _, _, i, trace, _ = X
+        is_finished, variables_star, _, _, i, verification_state, _ = X
         
         is_X_finite = jnp.isfinite(variables_star[0]).all()
         is_n_iter_not_reached = i < max_iter_boundary_method
@@ -336,11 +334,11 @@ def _plan_trajectory(
         
     
     # loop
-    X = ( jnp.array(False, dtype=jnp.bool_), variables, parameters, opt_t, i, trace_init, tol_inner ) # pack
+    X = ( jnp.array(False, dtype=jnp.bool_), variables, parameters, opt_t, i, verification_state_init, tol_inner ) # pack
     X = lax.while_loop( loop_cond, loop_body, X ) # loop
-    _, variables_star, _, opt_t, n_iter, trace, _ = X # unpack
+    _, variables_star, _, opt_t, n_iter, verification_state, _ = X # unpack
 
-    return variables_star, opt_t, n_iter, trace
+    return variables_star, opt_t, n_iter, verification_state
 
 
 
@@ -458,9 +456,6 @@ def plan_trajectory(
             res: solver-internal information that can be unpacked with unpack_res()
             
     """
-
-    def get_maximum_dtype():
-        return jnp.float64
     
     # check for correct parameters
     assert len(X_guess.shape) == 2
@@ -478,6 +473,7 @@ def plan_trajectory(
     assert X_guess.shape[1] == n_states
     
     assert type(max_iter_boundary_method) is int
+    assert type(max_iter_inner) is int
     
     #
     if verbose:
@@ -495,6 +491,9 @@ def plan_trajectory(
     # pass static parameters into objective function
     objective_ = partial(objective_penality_method, static_parameters=static_parameters)
     feasibility_metric_ = partial(feasibility_metric_penality_method, static_parameters=static_parameters)
+
+    # verification function (non specific to given problem to solve)
+    verification_fn_ = partial(_verify_step, feasibility_metric_fn=feasibility_metric_, eq_tol=eq_tol, neq_tol=neq_tol, verbose=verbose)
     
     # trace vars
     trace_init = ( 
@@ -504,23 +503,23 @@ def plan_trajectory(
     )
 
 
+
     #
     # iterate
     #
     opt_t = opt_t_init
     i = 0
-    trace = trace_init
+    verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
     # float32
-    if True:
-        variables, opt_t, n_iter_f32, trace = _plan_trajectory( 
+    if False:
+        variables, opt_t, n_iter_f32, verification_state = _plan_trajectory( 
             i, 
             variables, parameters, 
-            opt_t, trace, lam,
+            opt_t, verification_state, lam,
             tol_inner, 
             11, # max_iter_boundary_method 
-            eq_tol, neq_tol,
-            max_iter_inner, objective_, feasibility_metric_,
+            max_iter_inner, objective_, verification_fn_,
             verbose,
             target_dtype=jnp.float32
         )
@@ -532,14 +531,13 @@ def plan_trajectory(
 
     # float64
     if True:
-        variables, opt_t, n_iter_f64, trace = _plan_trajectory( 
+        variables, opt_t, n_iter_f64, verification_state = _plan_trajectory( 
             i, 
             variables, parameters, 
-            opt_t, trace, lam,
+            opt_t, verification_state, lam,
             tol_inner, 
             max_iter_boundary_method - i, 
-            eq_tol, neq_tol,
-            max_iter_inner, objective_, feasibility_metric_,
+            max_iter_inner, objective_, verification_fn_,
             verbose,
             target_dtype=jnp.float64
         )
@@ -548,6 +546,9 @@ def plan_trajectory(
 
     n_iter = i
     variables_star = variables
+    trace = verification_state[0]
+
+    is_converged = verification_state[1]
 
     #
     # end iterate
@@ -565,17 +566,8 @@ def plan_trajectory(
     # compute systems outputs for the optimized trajectory
     system_outputs = None
     if g is not None:
-        g_ = jax.vmap(g, in_axes=(0, 0, 0, None ) )
+        g_ = jax.vmap(g, in_axes=(0, 0, 0, None))
         system_outputs = g_(X_opt, U_opt, K, theta)
-
-    # eval metrics and look for convergence
-    metric_c_eq_final   = trace[0][n_iter-1]
-    metric_c_ineq_final = trace[1][n_iter-1]
-    
-    is_converged = jnp.logical_and(
-        metric_c_eq_final   < eq_tol,
-        metric_c_ineq_final < neq_tol
-    )
         
     # collect results
     res = {
