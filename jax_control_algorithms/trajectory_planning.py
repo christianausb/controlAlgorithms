@@ -7,6 +7,8 @@ import jaxopt
 
 from functools import partial
 from inspect import signature
+from dataclasses import dataclass
+
 import math
 from jax_control_algorithms.common import *
 
@@ -129,7 +131,7 @@ def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0,
         # total
         c_eq = jnp.vstack( (c_eq_running, c_eq_terminal) )
     else:
-        # no terminal contraints are considered
+        # no terminal constraints are considered
         c_eq = c_eq_running
 
     return c_eq
@@ -214,13 +216,13 @@ def __objective_penality_method( variables, parameters, static_parameters ):
 
 def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
     
-    I, theta, c_eq_penality, x0, opt_t                                = parameters
+    K, theta, c_eq_penality, x0, opt_t                                = parameters
     f, terminal_state_eq_constraints, inequ_constraints, running_cost = static_parameters
     X, U                                                              = variables
     
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, I, x0, theta, 0)
-    c_ineq = inequ_constraints(X, U, I, theta)
+    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, 0)
+    c_ineq = inequ_constraints(X, U, K, theta)
     
     #
     metric_c_eq   = jnp.max(  jnp.abs(c_eq) )
@@ -236,12 +238,25 @@ def feasibility_metric_penality_method(variables, parameters, static_parameters 
 
 
 
+@dataclass
+class Person():
+    name: str
+    age: int
+    height: float
+    email: str
+
 def _plan_trajectory( 
         i, variables, parameters, opt_t, trace_init, lam,
         tol_inner, max_iter_boundary_method, eq_tol, neq_tol,
         max_iter_inner, objective_, feasibility_metric_,
-        verbose
+        verbose, target_dtype
     ):
+
+    # convert dtypes
+    ( variables, parameters, opt_t, trace_init, lam, tol_inner, eq_tol, neq_tol, ) = _convert_dtype(
+        ( variables, parameters, opt_t, trace_init, lam, tol_inner, eq_tol, neq_tol, ),
+        target_dtype
+    )
 
     #
     # loop opt_t_init -> opt_t, opt_t = opt_t * 0.xx
@@ -344,16 +359,16 @@ def plan_trajectory(
     theta,
     
     max_iter_boundary_method = 40,
-    max_iter_inner = 5000,
-    verbose = True,
+    max_iter_inner = 5000, #
+    verbose = True, #
     
-    c_eq_penality = 100.0,
-    opt_t_init = 0.5,
-    lam = 1.6,
+    c_eq_penality = 100.0, #
+    opt_t_init = 0.5, 
+    lam = 1.6, #
     
-    eq_tol  = 0.0001,
-    neq_tol = 0.0001,
-    tol_inner = 0.0001,
+    eq_tol  = 0.0001, #
+    neq_tol = 0.0001, #
+    tol_inner = 0.0001, #
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
@@ -494,13 +509,45 @@ def plan_trajectory(
     #
     opt_t = opt_t_init
     i = 0
+    trace = trace_init
 
-    variables_star, opt_t, n_iter, trace = _plan_trajectory( 
-        i, variables, parameters, opt_t, trace_init, lam,
-        tol_inner, max_iter_boundary_method, eq_tol, neq_tol,
-        max_iter_inner, objective_, feasibility_metric_,
-        verbose
-    )
+    # float32
+    if True:
+        variables, opt_t, n_iter_f32, trace = _plan_trajectory( 
+            i, 
+            variables, parameters, 
+            opt_t, trace, lam,
+            tol_inner, 
+            11, # max_iter_boundary_method 
+            eq_tol, neq_tol,
+            max_iter_inner, objective_, feasibility_metric_,
+            verbose,
+            target_dtype=jnp.float32
+        )
+
+        i = i + n_iter_f32
+
+        if verbose:
+            jax.debug.print("👉 switching to higher numerical precision after {n_iter_f32} iterations: float32 --> float64", n_iter_f32=n_iter_f32)
+
+    # float64
+    if True:
+        variables, opt_t, n_iter_f64, trace = _plan_trajectory( 
+            i, 
+            variables, parameters, 
+            opt_t, trace, lam,
+            tol_inner, 
+            max_iter_boundary_method - i, 
+            eq_tol, neq_tol,
+            max_iter_inner, objective_, feasibility_metric_,
+            verbose,
+            target_dtype=jnp.float64
+        )
+        i = i + n_iter_f64
+
+
+    n_iter = i
+    variables_star = variables
 
     #
     # end iterate
@@ -543,6 +590,78 @@ def plan_trajectory(
 
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
 
+
+def _convert_dtype_to_32(pytree):
+    """
+    """
+    
+    def _convert_dtype_to_32(x):
+        
+        if not isinstance(x, jnp.ndarray):
+            return jnp.float32
+        
+        dtype = x.dtype
+        
+        if dtype == jnp.float64:
+            return jnp.float32
+        
+        if dtype == jnp.float32:
+            return jnp.float32
+        
+        elif dtype == jnp.int64:
+            return jnp.int32
+        
+        elif dtype == jnp.int32:
+            return jnp.int32
+    
+    return jax.tree_map( 
+        lambda x: jnp.array(x, dtype=_convert_dtype_to_32(x)), 
+        pytree 
+    )
+
+def _convert_dtype_to_64(pytree):
+    """
+    """
+    
+    def _convert_dtype_to_64(x):
+        
+        if not isinstance(x, jnp.ndarray):
+            return jnp.float64
+        
+        dtype = x.dtype
+        
+        if dtype == jnp.float64:
+            return jnp.float64
+        
+        if dtype == jnp.float32:
+            return jnp.float64
+        
+        elif dtype == jnp.int64:
+            return jnp.int64
+        
+        elif dtype == jnp.int32:
+            return jnp.int64
+    
+    return jax.tree_map( 
+        lambda x: jnp.array(x, dtype=_convert_dtype_to_64(x)), 
+        pytree 
+    )
+
+def _convert_dtype(pytree, target_dtype = jnp.float32 ):
+    """
+        t = {
+            'a': jnp.array([1,-0.5], dtype=jnp.float64),
+            'b': jnp.array([1,-0.5], dtype=jnp.int32),
+            'c': 0.1
+        }
+
+        _convert_dtype(t, jnp.float32), _convert_dtype(t, jnp.float64)
+    """
+    if target_dtype == jnp.float32:
+        return _convert_dtype_to_32(pytree)
+    
+    elif target_dtype == jnp.float64:
+        return _convert_dtype_to_64(pytree)
 
 
 
