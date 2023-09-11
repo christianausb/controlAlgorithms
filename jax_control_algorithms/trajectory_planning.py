@@ -242,6 +242,10 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     
     trace, _, = verification_state
 
+    #
+    is_X_finite = jnp.isfinite(variables[0]).all()
+    is_abort_because_of_nonfinite = jnp.logical_not(is_X_finite)
+
     # verify step
     max_eq_error, max_ineq_error = feasibility_metric_fn(variables, parameters)
     n_iter_inner = res_inner.state.iter_num
@@ -259,7 +263,36 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         trace[2].at[i].set(n_iter_inner),
     )
 
-    is_abort, i_best = None, None
+    # compare to prev. metric and see if it got smaller
+
+    
+    is_metric_check_active = i > 2
+
+    
+    def true_fn(X):
+        (i, trace, ) = X
+
+        delta_max_eq_error = trace[0][i] - trace[0][i-1]
+        is_abort  = delta_max_eq_error >= 0
+
+        return is_abort
+
+
+    def false_fn(X):
+        (i, trace, ) = X
+        return False
+
+
+    is_abort_because_of_metric = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace, ) )
+    i_best = None    
+
+    is_abort = jnp.logical_or(
+        is_abort_because_of_nonfinite,
+        is_abort_because_of_metric
+    )
+
+
+#    is_abort, i_best = None, None
 
     if verbose:
         jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt={opt_t} \t  eq={max_eq_error} \t neq={max_ineq_error}", 
@@ -267,7 +300,10 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
                         max_eq_error   = jnp.round(max_eq_error, decimals=5), 
                         max_ineq_error = jnp.round(max_ineq_error, decimals=5),
                         n_iter_inner  = n_iter_inner )
-            
+
+    print("is_abort", is_abort)
+
+    # verification_state, is_finished, is_abort, i_best            
     return ( trace, is_converged, ), is_converged, is_abort, i_best
 
 def _plan_trajectory( 
@@ -288,7 +324,7 @@ def _plan_trajectory(
     #
     
     def loop_body(X):
-        _, variables, parameters, opt_t, i, verification_state, tol_inner = X
+        _, _, variables, parameters, opt_t, i, verification_state, tol_inner = X
             
         #
         parameters_ = parameters + ( opt_t, )
@@ -296,21 +332,37 @@ def _plan_trajectory(
         # run optimization
         gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=tol_inner, maxiter=max_iter_inner)
         res = gd.run(variables, parameters=parameters_)
-        variables_star = res.params
+        _variables_next = res.params
 
         # run callback
-        verification_state, is_finished, is_abort, i_best = verification_fn(verification_state, i, res, variables_star, parameters, opt_t)
+        verification_state, is_finished, is_abort, i_best = verification_fn(verification_state, i, res, _variables_next, parameters, opt_t)
         
+        print("is_abort", is_abort)
+
+
+        variables_next = (
+            jnp.where(
+                is_abort, 
+                variables[0],      # use previous state of the iteration in case of abortion
+                _variables_next[0] #
+            ),
+            jnp.where(
+                is_abort, 
+                variables[1],      # use previous state of the iteration in case of abortion
+                _variables_next[1] #
+            ),
+        )
+
         if verbose:        
             lax.cond(is_finished, lambda : jax.debug.print("✅ found feasible solution"), lambda : None)
         
-        return ( is_finished, variables_star, parameters, opt_t * lam, i+1, verification_state, tol_inner )
+        return ( is_finished, is_abort, variables_next, parameters, opt_t * lam, i+1, verification_state, tol_inner )
     
     def loop_cond(X):
         
-        is_finished, variables_star, _, _, i, verification_state, _ = X
+        is_finished, is_abort, variables_star, _, _, i, verification_state, _ = X
         
-        is_X_finite = jnp.isfinite(variables_star[0]).all()
+        #is_X_finite = jnp.isfinite(variables_star[0]).all()
         is_n_iter_not_reached = i < max_iter_boundary_method
         
         is_max_iter_reached_and_not_finished = jnp.logical_and(
@@ -318,8 +370,8 @@ def _plan_trajectory(
             jnp.logical_not(is_finished),            
         )
         
-        is_continue = jnp.logical_and(
-            is_X_finite,
+        is_continue_iteration = jnp.logical_and(
+            jnp.logical_not(is_abort),
             jnp.logical_and(
                 jnp.logical_not(is_finished), 
                 is_n_iter_not_reached
@@ -327,16 +379,20 @@ def _plan_trajectory(
         )
         
         if verbose:
+            lax.cond( is_abort,                             lambda : jax.debug.print("-> abort as convergence has stopped"), lambda : None)
             lax.cond( is_max_iter_reached_and_not_finished, lambda : jax.debug.print("❌ max. iterations reached without a feasible solution"), lambda : None)
-            lax.cond( jnp.logical_not(is_X_finite),         lambda : jax.debug.print("❌ abort because of non finite numerics"), lambda : None)
+#            lax.cond( jnp.logical_not(is_X_finite),         lambda : jax.debug.print("❌ abort because of non finite numerics"), lambda : None)
         
-        return is_continue
+        return is_continue_iteration
         
     
     # loop
-    X = ( jnp.array(False, dtype=jnp.bool_), variables, parameters, opt_t, i, verification_state_init, tol_inner ) # pack
+    X = ( 
+            jnp.array(False, dtype=jnp.bool_), jnp.array(False, dtype=jnp.bool_), 
+            variables, parameters, opt_t, i, verification_state_init, tol_inner 
+        ) # pack
     X = lax.while_loop( loop_cond, loop_body, X ) # loop
-    _, variables_star, _, opt_t, n_iter, verification_state, _ = X # unpack
+    _, _, variables_star, _, opt_t, n_iter, verification_state, _ = X # unpack
 
     return variables_star, opt_t, n_iter, verification_state
 
@@ -512,7 +568,7 @@ def plan_trajectory(
     verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
     # float32
-    if False:
+    if True:
         variables, opt_t, n_iter_f32, verification_state = _plan_trajectory( 
             i, 
             variables, parameters, 
