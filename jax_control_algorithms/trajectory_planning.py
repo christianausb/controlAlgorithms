@@ -399,7 +399,7 @@ def _plan_trajectory(
 
 
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11 ) )
+@partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11,  18, 19 ) )
 def plan_trajectory(
     f, 
     g,
@@ -413,16 +413,19 @@ def plan_trajectory(
     theta,
     
     max_iter_boundary_method = 40,
-    max_iter_inner = 5000, #
-    verbose = True, #
+    max_iter_inner = 5000,
+    verbose = True,
     
-    c_eq_penality = 100.0, #
+    c_eq_penality = 100.0,
     opt_t_init = 0.5, 
-    lam = 1.6, #
+    lam = 1.6,
     
-    eq_tol  = 0.0001, #
-    neq_tol = 0.0001, #
-    tol_inner = 0.0001, #
+    eq_tol  = 0.0001,
+    neq_tol = 0.0001,
+    tol_inner = 0.0001,
+
+    enable_float64 = True,
+    max_float32_iterations = 0
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
@@ -500,6 +503,13 @@ def plan_trajectory(
                 
             tol_inner: float
                 tolerance passed to the inner solver
+
+            enable_float64: bool
+                use 64-bit floating point if true enabling better precision (default = True)
+
+            max_float32_iterations: int
+                apply at max max_float32_iterations number of iterations using 32-bit floating
+                point precision enabling faster computation (default = 0)
             
             
         Returns: X_opt, U_opt, system_outputs, res
@@ -568,13 +578,14 @@ def plan_trajectory(
     verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
     # float32
-    if True:
+    print("....", max_float32_iterations)
+    if max_float32_iterations > 0:
         variables, opt_t, n_iter_f32, verification_state = _plan_trajectory( 
             i, 
             variables, parameters, 
             opt_t, verification_state, lam,
             tol_inner, 
-            11, # max_iter_boundary_method 
+            max_float32_iterations,
             max_iter_inner, objective_, verification_fn_,
             verbose,
             target_dtype=jnp.float32
@@ -586,7 +597,7 @@ def plan_trajectory(
             jax.debug.print("👉 switching to higher numerical precision after {n_iter_f32} iterations: float32 --> float64", n_iter_f32=n_iter_f32)
 
     # float64
-    if True:
+    if enable_float64:
         variables, opt_t, n_iter_f64, verification_state = _plan_trajectory( 
             i, 
             variables, parameters, 
@@ -744,6 +755,9 @@ class Solver:
         self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
         
         self.use_continuation = use_continuation
+
+        self.enable_float64 = True
+        self.max_float32_iterations = 0
         
     def run(self):
         
@@ -774,6 +788,9 @@ class Solver:
             eq_tol        = self.eq_tol,
             neq_tol       = self.neq_tol,
             tol_inner     = self.tol_inner,
+
+            enable_float64         = self.enable_float64,
+            max_float32_iterations = self.max_float32_iterations,
         )
         end_time = time.time()
         elapsed = end_time - start_time
