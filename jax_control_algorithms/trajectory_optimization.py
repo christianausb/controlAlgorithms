@@ -301,12 +301,10 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
                         max_ineq_error = jnp.round(max_ineq_error, decimals=5),
                         n_iter_inner  = n_iter_inner )
 
-    print("is_abort", is_abort)
-
     # verification_state, is_finished, is_abort, i_best            
     return ( trace, is_converged, ), is_converged, is_abort, i_best
 
-def _plan_trajectory( 
+def _optimize_trajectory( 
         i, variables, parameters, opt_t, verification_state_init, lam,
         tol_inner, max_iter_boundary_method,
         max_iter_inner, objective_fn, verification_fn,
@@ -400,7 +398,7 @@ def _plan_trajectory(
 
 
 @partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11,  18, 19 ) )
-def plan_trajectory(
+def optimize_trajectory(
     f, 
     g,
     terminal_state_eq_constraints,
@@ -439,7 +437,7 @@ def plan_trajectory(
                 - x: (n_states, )     the state vector
                 - u: (n_inputs, )     the system input(s)
                 - k: scalar           the sampling index
-                - theta: (JAX-pytree) the parameters theta as passed to plan_trajectory
+                - theta: (JAX-pytree) the parameters theta as passed to optimize_trajectory
             g: 
                 the optional output function g(x, u, k, theta)
                 - the parameters of the callback have the same meaning like with the callback f
@@ -578,9 +576,8 @@ def plan_trajectory(
     verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
     # float32
-    print("....", max_float32_iterations)
     if max_float32_iterations > 0:
-        variables, opt_t, n_iter_f32, verification_state = _plan_trajectory( 
+        variables, opt_t, n_iter_f32, verification_state = _optimize_trajectory( 
             i, 
             variables, parameters, 
             opt_t, verification_state, lam,
@@ -598,7 +595,7 @@ def plan_trajectory(
 
     # float64
     if enable_float64:
-        variables, opt_t, n_iter_f64, verification_state = _plan_trajectory( 
+        variables, opt_t, n_iter_f64, verification_state = _optimize_trajectory( 
             i, 
             variables, parameters, 
             opt_t, verification_state, lam,
@@ -766,7 +763,7 @@ class Solver:
             self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
         
         start_time = time.time()
-        solver_return = plan_trajectory(
+        solver_return = optimize_trajectory(
             self.f, 
             self.g,
             self.terminal_state_eq_constraints,
