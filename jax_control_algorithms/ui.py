@@ -4,7 +4,7 @@ import IPython
 import ipywidgets as widgets
 from functools import partial
 
-from jax_control_algorithms.trajectory_planning import unpack_res
+from jax_control_algorithms.trajectory_optimization import unpack_res
 
 def solve_and_plot(solver, plot_fn):
     
