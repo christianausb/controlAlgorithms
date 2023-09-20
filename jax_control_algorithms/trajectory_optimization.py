@@ -263,14 +263,11 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         trace[2].at[i].set(n_iter_inner),
     )
 
-    # compare to prev. metric and see if it got smaller
-
-    
+    # As being in the 2nd iteration, compare to prev. metric and see if it got smaller
     is_metric_check_active = i > 2
 
-    
-    def true_fn(X):
-        (i, trace, ) = X
+    def true_fn(par):
+        (i, trace, ) = par
 
         delta_max_eq_error = trace[0][i] - trace[0][i-1]
         is_abort  = delta_max_eq_error >= 0
@@ -278,10 +275,9 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         return is_abort
 
 
-    def false_fn(X):
-        (i, trace, ) = X
+    def false_fn(par):
+        (i, trace, ) = par
         return False
-
 
     is_abort_because_of_metric = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace, ) )
     i_best = None    
@@ -291,24 +287,24 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         is_abort_because_of_metric
     )
 
-
-#    is_abort, i_best = None, None
-
     if verbose:
-        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt={opt_t} \t  eq={max_eq_error} \t neq={max_ineq_error}", 
-                        i=i,    opt_t = jnp.round(opt_t, decimals=2),  
-                        max_eq_error   = jnp.round(max_eq_error, decimals=5), 
+        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt={opt_t} \t  eq={max_eq_error} \t neq={max_ineq_error}",
+                        i=i,    opt_t  = jnp.round(opt_t, decimals=2),
+                        max_eq_error   = jnp.round(max_eq_error, decimals=5),
                         max_ineq_error = jnp.round(max_ineq_error, decimals=5),
-                        n_iter_inner  = n_iter_inner )
+                        n_iter_inner   = n_iter_inner)
+        
+#        is_X_finite = jnp.array(False, dtype=jnp.bool_)
+#        lax.cond(is_X_finite, lambda : jax.debug.print("✅ finite numerics"), lambda : None)
 
     # verification_state, is_finished, is_abort, i_best            
-    return ( trace, is_converged, ), is_converged, is_abort, i_best
+    return ( trace, is_converged, ), is_converged, is_abort, is_X_finite, i_best
 
 def _optimize_trajectory( 
         i, variables, parameters, opt_t, verification_state_init, lam,
         tol_inner, max_iter_boundary_method,
         max_iter_inner, objective_fn, verification_fn,
-        verbose, target_dtype
+        verbose, print_errors, target_dtype
     ):
 
     # convert dtypes
@@ -321,8 +317,8 @@ def _optimize_trajectory(
     # loop opt_t_init -> opt_t, opt_t = opt_t * 0.xx
     #
     
-    def loop_body(X):
-        _, _, variables, parameters, opt_t, i, verification_state, tol_inner = X
+    def loop_body(loop_par):
+        _, _, _, variables, parameters, opt_t, i, verification_state, tol_inner = loop_par
             
         #
         parameters_ = parameters + ( opt_t, )
@@ -333,11 +329,8 @@ def _optimize_trajectory(
         _variables_next = res.params
 
         # run callback
-        verification_state, is_finished, is_abort, i_best = verification_fn(verification_state, i, res, _variables_next, parameters, opt_t)
+        verification_state, is_finished, is_abort, is_X_finite, i_best = verification_fn(verification_state, i, res, _variables_next, parameters, opt_t)
         
-        print("is_abort", is_abort)
-
-
         variables_next = (
             jnp.where(
                 is_abort, 
@@ -354,13 +347,12 @@ def _optimize_trajectory(
         if verbose:        
             lax.cond(is_finished, lambda : jax.debug.print("✅ found feasible solution"), lambda : None)
         
-        return ( is_finished, is_abort, variables_next, parameters, opt_t * lam, i+1, verification_state, tol_inner )
+        return ( is_finished, is_abort, is_X_finite, variables_next, parameters, opt_t * lam, i+1, verification_state, tol_inner )
     
-    def loop_cond(X):
+    def loop_cond(loop_par):
         
-        is_finished, is_abort, variables_star, _, _, i, verification_state, _ = X
+        is_finished, is_abort, is_X_finite, variables_star, _, _, i, verification_state, _ = loop_par
         
-        #is_X_finite = jnp.isfinite(variables_star[0]).all()
         is_n_iter_not_reached = i < max_iter_boundary_method
         
         is_max_iter_reached_and_not_finished = jnp.logical_and(
@@ -378,23 +370,23 @@ def _optimize_trajectory(
         
         if verbose:
             lax.cond( is_abort,                             lambda : jax.debug.print("-> abort as convergence has stopped"), lambda : None)
-            lax.cond( is_max_iter_reached_and_not_finished, lambda : jax.debug.print("❌ max. iterations reached without a feasible solution"), lambda : None)
-#            lax.cond( jnp.logical_not(is_X_finite),         lambda : jax.debug.print("❌ abort because of non finite numerics"), lambda : None)
+            if print_errors:
+                lax.cond( is_max_iter_reached_and_not_finished, lambda : jax.debug.print("❌ max. iterations reached without a feasible solution"), lambda : None)
+                lax.cond( jnp.logical_not(is_X_finite),         lambda : jax.debug.print("❌ found non finite numerics"), lambda : None)
         
         return is_continue_iteration
-        
     
     # loop
-    X = ( 
-            jnp.array(False, dtype=jnp.bool_), jnp.array(False, dtype=jnp.bool_), 
+    loop_par = ( 
+            jnp.array(False, dtype=jnp.bool_),
+            jnp.array(False, dtype=jnp.bool_),
+            jnp.array(True, dtype=jnp.bool_),
             variables, parameters, opt_t, i, verification_state_init, tol_inner 
         ) # pack
-    X = lax.while_loop( loop_cond, loop_body, X ) # loop
-    _, _, variables_star, _, opt_t, n_iter, verification_state, _ = X # unpack
+    loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
+    _, _, _, variables_star, _, opt_t, n_iter, verification_state, _ = loop_par # unpack
 
     return variables_star, opt_t, n_iter, verification_state
-
-
 
 
 @partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11,  18, 19 ) )
@@ -584,7 +576,8 @@ def optimize_trajectory(
             tol_inner, 
             max_float32_iterations,
             max_iter_inner, objective_, verification_fn_,
-            verbose,
+            verbose, 
+            False, # show_errors
             target_dtype=jnp.float32
         )
 
@@ -602,7 +595,8 @@ def optimize_trajectory(
             tol_inner, 
             max_iter_boundary_method - i, 
             max_iter_inner, objective_, verification_fn_,
-            verbose,
+            verbose, 
+            True if verbose else False, # show_errors
             target_dtype=jnp.float64
         )
         i = i + n_iter_f64
@@ -617,8 +611,6 @@ def optimize_trajectory(
     #
     # end iterate
     #
-
-
 
     # unpack results for optimized variables
     X_opt, U_opt = variables_star
