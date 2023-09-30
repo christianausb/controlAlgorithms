@@ -238,7 +238,7 @@ def feasibility_metric_penality_method(variables, parameters, static_parameters 
 
 
 
-def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, eq_tol, neq_tol, verbose : bool):
+def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, eq_tol, verbose : bool):
     
     trace, _, = verification_state
 
@@ -251,6 +251,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     n_iter_inner = res_inner.state.iter_num
     
     # verify metrics and check for convergence
+    neq_tol = 0.0001
     is_converged = jnp.logical_and(
         max_eq_error   < eq_tol,
         max_ineq_error < neq_tol
@@ -287,11 +288,17 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         is_abort_because_of_metric
     )
 
+    def my_round(x, decimals=2):
+        scale = jnp.array(10.0**decimals, dtype=jnp.float64)
+        return (
+            jnp.array(jnp.round( scale * x, decimals=0 ), dtype=jnp.int32) / scale
+        )
+
+
     if verbose:
-        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt={opt_t} \t  eq={max_eq_error} \t neq={max_ineq_error}",
-                        i=i,    opt_t  = jnp.round(opt_t, decimals=2),
-                        max_eq_error   = jnp.round(max_eq_error, decimals=5),
-                        max_ineq_error = jnp.round(max_ineq_error, decimals=5),
+        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt = {opt_t} 10^-1 \t eq_error/eq_tol = {max_eq_error} 10^-2",
+                        i=i,    opt_t  = my_round(10 * opt_t, decimals=0), #  jnp.round(opt_t, decimals=2),
+                        max_eq_error   = my_round(100 * max_eq_error / eq_tol , decimals=0),
                         n_iter_inner   = n_iter_inner)
         
 #        is_X_finite = jnp.array(False, dtype=jnp.bool_)
@@ -302,7 +309,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
 
 def _optimize_trajectory( 
         i, variables, parameters, opt_t, verification_state_init, lam,
-        tol_inner, max_iter_boundary_method,
+        tol_inner, t_min, max_iter_boundary_method,
         max_iter_inner, objective_fn, verification_fn,
         verbose, print_errors, target_dtype
     ):
@@ -318,7 +325,7 @@ def _optimize_trajectory(
     #
     
     def loop_body(loop_par):
-        _, _, _, variables, parameters, opt_t, i, verification_state, tol_inner = loop_par
+        _, _, _, variables, parameters, opt_t, i, verification_state, tol_inner, t_min = loop_par
             
         #
         parameters_ = parameters + ( opt_t, )
@@ -330,6 +337,9 @@ def _optimize_trajectory(
 
         # run callback
         verification_state, is_finished, is_abort, is_X_finite, i_best = verification_fn(verification_state, i, res, _variables_next, parameters, opt_t)
+
+        # 
+        is_finished = jnp.logical_and(is_finished, opt_t > t_min)
         
         variables_next = (
             jnp.where(
@@ -347,11 +357,11 @@ def _optimize_trajectory(
         if verbose:        
             lax.cond(is_finished, lambda : jax.debug.print("✅ found feasible solution"), lambda : None)
         
-        return ( is_finished, is_abort, is_X_finite, variables_next, parameters, opt_t * lam, i+1, verification_state, tol_inner )
+        return ( is_finished, is_abort, is_X_finite, variables_next, parameters, opt_t * lam, i+1, verification_state, tol_inner, t_min )
     
     def loop_cond(loop_par):
         
-        is_finished, is_abort, is_X_finite, variables_star, _, _, i, verification_state, _ = loop_par
+        is_finished, is_abort, is_X_finite, variables_star, _, _, i, verification_state, _, t_min = loop_par
         
         is_n_iter_not_reached = i < max_iter_boundary_method
         
@@ -381,10 +391,10 @@ def _optimize_trajectory(
             jnp.array(False, dtype=jnp.bool_),
             jnp.array(False, dtype=jnp.bool_),
             jnp.array(True, dtype=jnp.bool_),
-            variables, parameters, opt_t, i, verification_state_init, tol_inner 
+            variables, parameters, opt_t, i, verification_state_init, tol_inner, t_min
         ) # pack
     loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
-    _, _, _, variables_star, _, opt_t, n_iter, verification_state, _ = loop_par # unpack
+    _, _, _, variables_star, _, opt_t, n_iter, verification_state, _, _ = loop_par # unpack
 
     return variables_star, opt_t, n_iter, verification_state
 
@@ -411,7 +421,7 @@ def optimize_trajectory(
     lam = 1.6,
     
     eq_tol  = 0.0001,
-    neq_tol = 0.0001,
+    t_min = 100.0,
     tol_inner = 0.0001,
 
     enable_float64 = True,
@@ -488,8 +498,8 @@ def optimize_trajectory(
             eq_tol: float
                 tolerance to maximal error of the equality constraints (maximal absolute error)
                 
-            neq_tol: float
-                tolerance to maximal error of the inequality constraints
+            t_min: float
+                XXXX
                 
             tol_inner: float
                 tolerance passed to the inner solver
@@ -549,7 +559,7 @@ def optimize_trajectory(
     feasibility_metric_ = partial(feasibility_metric_penality_method, static_parameters=static_parameters)
 
     # verification function (non specific to given problem to solve)
-    verification_fn_ = partial(_verify_step, feasibility_metric_fn=feasibility_metric_, eq_tol=eq_tol, neq_tol=neq_tol, verbose=verbose)
+    verification_fn_ = partial(_verify_step, feasibility_metric_fn=feasibility_metric_, eq_tol=eq_tol, verbose=verbose)
     
     # trace vars
     trace_init = ( 
@@ -573,7 +583,8 @@ def optimize_trajectory(
             i, 
             variables, parameters, 
             opt_t, verification_state, lam,
-            tol_inner, 
+            tol_inner,
+            t_min, 
             max_float32_iterations,
             max_iter_inner, objective_, verification_fn_,
             verbose, 
@@ -593,6 +604,7 @@ def optimize_trajectory(
             variables, parameters, 
             opt_t, verification_state, lam,
             tol_inner, 
+            t_min, 
             max_iter_boundary_method - i, 
             max_iter_inner, objective_, verification_fn_,
             verbose, 
@@ -732,7 +744,7 @@ class Solver:
         self.lam = 1.6
 
         self.eq_tol  = 0.0001
-        self.neq_tol = 0.0001
+        self.t_min = 100.0
         
         self.tol_inner = 0.0001
         
@@ -775,7 +787,7 @@ class Solver:
             opt_t_init    = self.opt_t_init,
             lam           = self.lam,
             eq_tol        = self.eq_tol,
-            neq_tol       = self.neq_tol,
+            t_min         = self.t_min,
             tol_inner     = self.tol_inner,
 
             enable_float64         = self.enable_float64,
@@ -783,7 +795,9 @@ class Solver:
         )
         end_time = time.time()
         elapsed = end_time - start_time
-        print(f"Execution time: {elapsed} seconds")
+
+        if self.verbose:
+            print(f"time to run: {elapsed} seconds")
         
         X_opt, U_opt, system_outputs, res = solver_return
         
