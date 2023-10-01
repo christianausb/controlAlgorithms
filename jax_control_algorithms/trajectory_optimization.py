@@ -239,7 +239,7 @@ def feasibility_metric_penality_method(variables, parameters, static_parameters 
 
 
 
-def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, eq_tol, verbose : bool):
+def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, t_min, eq_tol, verbose : bool):
     
     trace, _, = verification_state
 
@@ -298,13 +298,16 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         return (
             jnp.array(jnp.round( scale * x, decimals=0 ), dtype=jnp.int32) / scale
         )
+    
+    def my_to_int(x):
+        return jnp.array(x, dtype=jnp.int32)
 
 
     if verbose:
         
-        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt = {opt_t} 10^-1 \t eq_error/eq_tol = {max_eq_error} 10^-2",
-                        i=i,    opt_t  = my_round(10 * opt_t, decimals=0), #  jnp.round(opt_t, decimals=2),
-                        max_eq_error   = my_round(100 * max_eq_error / eq_tol , decimals=0),
+        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t/t_final = {opt_t} % \t eq_error/eq_tol = {max_eq_error} %",
+                        i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_min, decimals=0)),
+                        max_eq_error   = my_to_int(my_round(100 * max_eq_error / eq_tol , decimals=0)),
                         n_iter_inner   = n_iter_inner)
         
         if False:  # additional info (for debugging purposes)
@@ -603,7 +606,10 @@ def optimize_trajectory(
     feasibility_metric_ = partial(feasibility_metric_penality_method, static_parameters=static_parameters)
 
     # verification function (non specific to given problem to solve)
-    verification_fn_ = partial(_verify_step, feasibility_metric_fn=feasibility_metric_, eq_tol=eq_tol, verbose=verbose)
+    verification_fn_ = partial(
+        _verify_step, 
+        feasibility_metric_fn=feasibility_metric_, t_min=t_min, eq_tol=eq_tol, verbose=verbose
+    )
     
     # trace vars
     trace_init = ( 
