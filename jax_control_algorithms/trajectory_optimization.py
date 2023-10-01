@@ -154,7 +154,7 @@ def cost_fn(f, running_cost, X_opt_var, U_opt_var, K, theta):
 
 def __objective_penality_method( variables, parameters, static_parameters ):
     
-    K, theta, c_eq_penality, x0, opt_t                                = parameters
+    K, theta, c_eq_penality, x0, opt_t, opt_c_eq                      = parameters
     f, terminal_state_eq_constraints, inequ_constraints, running_cost = static_parameters
     X, U                                                              = variables
     
@@ -177,7 +177,7 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     # equality constraints using penality method
     
     if OPTION == 'A':
-        J1_A = c_eq_penality * opt_t * jnp.mean(
+        J1_A = opt_c_eq * jnp.mean(
             ( c_eq.reshape(-1) )**2
         )
         J_equality_costs = J1_A
@@ -323,15 +323,18 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     return ( trace, is_converged, ), is_converged, is_abort, is_X_finite, i_best
 
 def _optimize_trajectory( 
-        i, variables, parameters, opt_t, verification_state_init, lam,
+        i, variables, parameters, opt_t, opt_c_eq, verification_state_init, lam,
         tol_inner, t_min, max_iter_boundary_method,
         max_iter_inner, objective_fn, verification_fn,
         verbose, print_errors, target_dtype
     ):
 
+#    print('opt_c_eq A', opt_c_eq)
+#    print('opt_t A', opt_t)
+
     # convert dtypes
-    ( variables, parameters, opt_t, verification_state_init, lam, tol_inner, ) = _convert_dtype(
-        ( variables, parameters, opt_t, verification_state_init, lam, tol_inner, ),
+    ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = _convert_dtype(
+        ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ),
         target_dtype
     )
 
@@ -340,33 +343,42 @@ def _optimize_trajectory(
     #
     
     def loop_body(loop_par):
-        _, _, _, variables, parameters, opt_t, i, verification_state, tol_inner, t_min = loop_par
+        
+        # _, _, _, variables, parameters, opt_t, opt_c_eq, i, verification_state, tol_inner, t_min = loop_par
             
         #
-        parameters_ = parameters + ( opt_t, )
+        parameters_ = loop_par['parameters'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
 
         # run optimization
-        gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=tol_inner, maxiter=max_iter_inner)
-        res = gd.run(variables, parameters=parameters_)
+        gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=max_iter_inner)
+        res = gd.run(loop_par['variables'], parameters=parameters_)
         _variables_next = res.params
 
         # run callback
-        verification_state, is_finished, is_abort, is_X_finite, i_best = verification_fn(verification_state, i, res, _variables_next, parameters, opt_t)
+        verification_state_next, is_finished, is_abort, is_X_finite, i_best = verification_fn(
+            loop_par['verification_state'], 
+            loop_par['i'], 
+            res, _variables_next, 
+            loop_par['parameters'], 
+            loop_par['opt_t']
+        )
 
         # t-control , t_min -> t_final
-        is_finished = jnp.logical_and(is_finished, opt_t >= t_min)
-        opt_t_next = jnp.clip(opt_t * lam, 0, t_min) 
+        is_finished = jnp.logical_and(is_finished, loop_par['opt_t'] >= loop_par['t_min'])
+        opt_t_next = jnp.clip(loop_par['opt_t'] * lam, 0, loop_par['t_min']) 
+
+        opt_c_eq_next = loop_par['opt_c_eq'] * lam
 
         #
         variables_next = (
             jnp.where(
                 is_abort, 
-                variables[0],      # use previous state of the iteration in case of abortion
+                loop_par['variables'][0],      # use previous state of the iteration in case of abortion
                 _variables_next[0] #
             ),
             jnp.where(
                 is_abort, 
-                variables[1],      # use previous state of the iteration in case of abortion
+                loop_par['variables'][1],      # use previous state of the iteration in case of abortion
                 _variables_next[1] #
             ),
         )
@@ -374,46 +386,81 @@ def _optimize_trajectory(
         if verbose:        
             lax.cond(is_finished, lambda : jax.debug.print("✅ found feasible solution"), lambda : None)
         
-        return ( is_finished, is_abort, is_X_finite, variables_next, parameters, opt_t_next, i+1, verification_state, tol_inner, t_min )
+#        return ( is_finished, is_abort, is_X_finite, variables_next, parameters, opt_t_next, opt_c_eq_next, i+1, verification_state, tol_inner, t_min )
+
+        loop_par = {
+            'is_finished' : is_finished,
+            'is_abort'    : is_abort,
+            'is_X_finite' : is_X_finite,
+            'variables'   : variables_next, 
+            'parameters'  : loop_par['parameters'], 
+            'opt_t'       : opt_t_next, 
+            'opt_c_eq'    : opt_c_eq_next, 
+            'i'           : loop_par['i'] + 1,
+            'verification_state' : verification_state_next, 
+            'tol_inner'   : loop_par['tol_inner'], 
+            't_min'       : loop_par['t_min'],
+        }
+
+        return loop_par
     
     def loop_cond(loop_par):
         
-        is_finished, is_abort, is_X_finite, variables_star, _, _, i, verification_state, _, t_min = loop_par
+#        is_finished, is_abort, is_X_finite, variables_star, _, _, _, i, verification_state, _, t_min = loop_par
         
         is_n_iter_not_reached = i < max_iter_boundary_method
         
         is_max_iter_reached_and_not_finished = jnp.logical_and(
             jnp.logical_not(is_n_iter_not_reached),
-            jnp.logical_not(is_finished),            
+            jnp.logical_not(loop_par['is_finished']),            
         )
         
         is_continue_iteration = jnp.logical_and(
-            jnp.logical_not(is_abort),
+            jnp.logical_not(loop_par['is_abort']),
             jnp.logical_and(
-                jnp.logical_not(is_finished), 
+                jnp.logical_not(loop_par['is_finished']), 
                 is_n_iter_not_reached
             )
         )
         
         if verbose:
-            lax.cond( is_abort,                             lambda : jax.debug.print("-> abort as convergence has stopped"), lambda : None)
+            lax.cond( loop_par['is_abort'],                             lambda : jax.debug.print("-> abort as convergence has stopped"), lambda : None)
             if print_errors:
                 lax.cond( is_max_iter_reached_and_not_finished, lambda : jax.debug.print("❌ max. iterations reached without a feasible solution"), lambda : None)
-                lax.cond( jnp.logical_not(is_X_finite),         lambda : jax.debug.print("❌ found non finite numerics"), lambda : None)
+                lax.cond( jnp.logical_not(loop_par['is_X_finite']),         lambda : jax.debug.print("❌ found non finite numerics"), lambda : None)
         
         return is_continue_iteration
     
     # loop
-    loop_par = ( 
-            jnp.array(False, dtype=jnp.bool_),
-            jnp.array(False, dtype=jnp.bool_),
-            jnp.array(True, dtype=jnp.bool_),
-            variables, parameters, opt_t, i, verification_state_init, tol_inner, t_min
-        ) # pack
-    loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
-    _, _, _, variables_star, _, opt_t, n_iter, verification_state, _, _ = loop_par # unpack
+#    loop_par = ( 
+#            jnp.array(False, dtype=jnp.bool_),
+#            jnp.array(False, dtype=jnp.bool_),
+#            jnp.array(True, dtype=jnp.bool_),
+#            variables, parameters, opt_t, opt_c_eq, i, verification_state_init, tol_inner, t_min
+#        ) # pack
+    
+    print('opt_c_eq', opt_c_eq)
 
-    return variables_star, opt_t, n_iter, verification_state
+    loop_par = {
+        'is_finished' : jnp.array(False, dtype=jnp.bool_),
+        'is_abort'    : jnp.array(False, dtype=jnp.bool_),
+        'is_X_finite' : jnp.array(True, dtype=jnp.bool_),
+        'variables'     : variables, 
+        'parameters' : parameters, 
+        'opt_t' : opt_t, 
+        'opt_c_eq' : opt_c_eq, 
+        'i' : i, 
+        'verification_state' : verification_state_init, 
+        'tol_inner' : tol_inner, 
+        't_min' : t_min,
+    }
+
+    loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
+#    _, _, _, variables_star, _, opt_t, opt_c_eq, n_iter, verification_state, _, _ = loop_par # unpack
+
+    n_iter = loop_par['i']
+
+    return loop_par['variables'], loop_par['opt_t'], loop_par['opt_c_eq'], n_iter, loop_par['verification_state']
 
 
 @partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11,  18, 19 ) )
@@ -503,7 +550,7 @@ def optimize_trajectory(
             
             -- solver settings (can be jax datatypes) --
             
-            c_eq_penality: float
+            c_eq_penality: float  -rename-> c_eq_init
                 xxx
                 
             opt_t_init: float
@@ -590,16 +637,21 @@ def optimize_trajectory(
     #
     # iterate
     #
+    opt_c_eq_init = c_eq_penality # TBD: rename and collapse
+
     opt_t = opt_t_init
+    opt_c_eq = opt_c_eq_init
     i = 0
     verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
     # float32
     if max_float32_iterations > 0:
-        variables, opt_t, n_iter_f32, verification_state = _optimize_trajectory( 
+        variables, opt_t, opt_c_eq, n_iter_f32, verification_state = _optimize_trajectory( 
             i, 
             variables, parameters, 
-            opt_t, verification_state, lam,
+            jnp.array(opt_t, dtype=jnp.float32),
+            jnp.array(opt_c_eq, dtype=jnp.float32),
+            verification_state, lam,
             tol_inner,
             t_min, 
             max_float32_iterations,
@@ -616,10 +668,12 @@ def optimize_trajectory(
 
     # float64
     if enable_float64:
-        variables, opt_t, n_iter_f64, verification_state = _optimize_trajectory( 
+        variables, opt_t, opt_c_eq, n_iter_f64, verification_state = _optimize_trajectory( 
             i, 
             variables, parameters, 
-            opt_t, verification_state, lam,
+            jnp.array(opt_t, dtype=jnp.float64),
+            jnp.array(opt_c_eq, dtype=jnp.float64),
+            verification_state, lam,
             tol_inner, 
             t_min, 
             max_iter_boundary_method - i, 
