@@ -10,16 +10,15 @@ def verify_test_results(test_results):
 
 @testbook('examples/sysident.ipynb', execute=True)
 def test_sysident(tb):
-
-#   verify_test_results(tb.test_results)
    assert True
 
 @testbook('examples/state_est_pendulum.ipynb', execute=True)
 def test_state_est_pendulum(tb):
    assert True
 
-@testbook('examples/trajectory_integrator.ipynb', execute=True)
+@testbook('examples/trajectory_optim_integrator.ipynb', execute=True)
 def test_trajectory_optim(tb):
+#   verify_test_results(tb.test_results)
    assert True
 
 @testbook('examples/trajectory_optim.ipynb', execute=True)
