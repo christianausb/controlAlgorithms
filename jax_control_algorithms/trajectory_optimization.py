@@ -239,7 +239,7 @@ def feasibility_metric_penality_method(variables, parameters, static_parameters 
 
 
 
-def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, t_min, eq_tol, verbose : bool):
+def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool):
     
     trace, _, = verification_state
 
@@ -306,7 +306,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     if verbose:
         
         jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t/t_final = {opt_t} % \t eq_error/eq_tol = {max_eq_error} %",
-                        i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_min, decimals=0)),
+                        i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_final, decimals=0)),
                         max_eq_error   = my_to_int(my_round(100 * max_eq_error / eq_tol , decimals=0)),
                         n_iter_inner   = n_iter_inner)
         
@@ -325,7 +325,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
 
 def _optimize_trajectory( 
         i, variables, parameters, opt_t, opt_c_eq, verification_state_init, lam,
-        tol_inner, t_min, max_iter_boundary_method,
+        tol_inner, t_final, max_iter_boundary_method,
         max_iter_inner, objective_fn, verification_fn,
         verbose, print_errors, target_dtype
     ):
@@ -360,9 +360,9 @@ def _optimize_trajectory(
             loop_par['opt_t']
         )
 
-        # t-control , t_min -> t_final
-        is_finished = jnp.logical_and(is_finished, loop_par['opt_t'] >= loop_par['t_min'])
-        opt_t_next = jnp.clip(loop_par['opt_t'] * lam, 0, loop_par['t_min']) 
+        # t-control , t_final -> t_final
+        is_finished = jnp.logical_and(is_finished, loop_par['opt_t'] >= loop_par['t_final'])
+        opt_t_next = jnp.clip(loop_par['opt_t'] * lam, 0, loop_par['t_final']) 
 
         opt_c_eq_next = loop_par['opt_c_eq'] * lam
 
@@ -394,7 +394,7 @@ def _optimize_trajectory(
             'i'           : loop_par['i'] + 1,
             'verification_state' : verification_state_next, 
             'tol_inner'   : loop_par['tol_inner'], 
-            't_min'       : loop_par['t_min'],
+            't_final'       : loop_par['t_final'],
         }
 
         return loop_par
@@ -435,11 +435,10 @@ def _optimize_trajectory(
         'i' : i, 
         'verification_state' : verification_state_init, 
         'tol_inner' : tol_inner, 
-        't_min' : t_min,
+        't_final' : t_final,
     }
 
     loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
-#    _, _, _, variables_star, _, opt_t, opt_c_eq, n_iter, verification_state, _, _ = loop_par # unpack
 
     n_iter = loop_par['i']
 
@@ -468,7 +467,7 @@ def optimize_trajectory(
     lam = 1.6,
     
     eq_tol  = 0.0001,
-    t_min = 100.0,
+    t_final = 100.0,
     tol_inner = 0.0001,
 
     enable_float64 = True,
@@ -545,7 +544,7 @@ def optimize_trajectory(
             eq_tol: float
                 tolerance to maximal error of the equality constraints (maximal absolute error)
                 
-            t_min: float
+            t_final: float
                 XXXX
                 
             tol_inner: float
@@ -608,7 +607,7 @@ def optimize_trajectory(
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
         _verify_step, 
-        feasibility_metric_fn=feasibility_metric_, t_min=t_min, eq_tol=eq_tol, verbose=verbose
+        feasibility_metric_fn=feasibility_metric_, t_final=t_final, eq_tol=eq_tol, verbose=verbose
     )
     
     # trace vars
@@ -636,7 +635,7 @@ def optimize_trajectory(
             jnp.array(opt_c_eq, dtype=jnp.float32),
             verification_state, lam,
             tol_inner,
-            t_min, 
+            t_final, 
             max_float32_iterations,
             max_iter_inner, objective_, verification_fn_,
             verbose, 
@@ -658,7 +657,7 @@ def optimize_trajectory(
             jnp.array(opt_c_eq, dtype=jnp.float64),
             verification_state, lam,
             tol_inner, 
-            t_min, 
+            t_final, 
             max_iter_boundary_method - i, 
             max_iter_inner, objective_, verification_fn_,
             verbose, 
@@ -798,7 +797,7 @@ class Solver:
         self.lam = 1.6
 
         self.eq_tol  = 0.0001
-        self.t_min = 100.0
+        self.t_final = 100.0
         
         self.tol_inner = 0.0001
         
@@ -813,6 +812,9 @@ class Solver:
 
         self.enable_float64 = True
         self.max_float32_iterations = 0
+
+        # status of latest run
+        self.success = False
         
     def run(self):
         
@@ -841,7 +843,7 @@ class Solver:
             opt_t_init    = self.opt_t_init,
             lam           = self.lam,
             eq_tol        = self.eq_tol,
-            t_min         = self.t_min,
+            t_final         = self.t_final,
             tol_inner     = self.tol_inner,
 
             enable_float64         = self.enable_float64,
@@ -857,6 +859,7 @@ class Solver:
         
         self.X_guess = X_opt[1:]
         self.U_guess = U_opt
+        self.success = res['is_converged'].tolist()
         
         return solver_return
     
