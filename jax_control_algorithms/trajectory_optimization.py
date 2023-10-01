@@ -49,7 +49,8 @@ def boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
     
     # linear continuation for x < x_thr (left side)
     if is_continue_linear:
-        x_linear_cont = ddx * (x - x_thr) + y_max
+        _ddx = jnp.clip( ddx, -y_max*10, 0 )
+        x_linear_cont = _ddx * (x - x_thr) + y_max
     else:
         x_linear_cont = y_max
     
@@ -208,7 +209,7 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     J_cost_function = cost_fn(f, running_cost, X, U, K, theta)
     
     J_boundary_costs = jnp.mean(
-        boundary_fn(c_ineq, opt_t, 11, False)
+        boundary_fn(c_ineq, opt_t, 11, True)
     )
     
     return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
@@ -252,9 +253,13 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     
     # verify metrics and check for convergence
     neq_tol = 0.0001
+
+    is_eq_converged  = max_eq_error < eq_tol
+    is_neq_converged = max_ineq_error < neq_tol
+
     is_converged = jnp.logical_and(
-        max_eq_error   < eq_tol,
-        max_ineq_error < neq_tol
+        is_eq_converged,
+        is_neq_converged,
     )
     
     # trace
@@ -296,11 +301,21 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
 
 
     if verbose:
+        
         jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t_opt = {opt_t} 10^-1 \t eq_error/eq_tol = {max_eq_error} 10^-2",
                         i=i,    opt_t  = my_round(10 * opt_t, decimals=0), #  jnp.round(opt_t, decimals=2),
                         max_eq_error   = my_round(100 * max_eq_error / eq_tol , decimals=0),
                         n_iter_inner   = n_iter_inner)
         
+        jax.debug.print(
+            "   is_abort_because_of_nonfinite={is_abort_because_of_nonfinite} is_abort_because_of_metric={is_abort_because_of_metric}) " + 
+            "is_eq_converged={is_eq_converged}, is_neq_converged={is_neq_converged}",
+            is_abort_because_of_nonfinite=is_abort_because_of_nonfinite,
+            is_abort_because_of_metric=is_abort_because_of_metric,
+            is_eq_converged=is_eq_converged,
+            is_neq_converged=is_neq_converged,
+        )
+
 #        is_X_finite = jnp.array(False, dtype=jnp.bool_)
 #        lax.cond(is_X_finite, lambda : jax.debug.print("✅ finite numerics"), lambda : None)
 
@@ -338,9 +353,11 @@ def _optimize_trajectory(
         # run callback
         verification_state, is_finished, is_abort, is_X_finite, i_best = verification_fn(verification_state, i, res, _variables_next, parameters, opt_t)
 
-        # 
-        is_finished = jnp.logical_and(is_finished, opt_t > t_min)
-        
+        # t-control , t_min -> t_final
+        is_finished = jnp.logical_and(is_finished, opt_t >= t_min)
+        opt_t_next = jnp.clip(opt_t * lam, 0, t_min) 
+
+        #
         variables_next = (
             jnp.where(
                 is_abort, 
@@ -357,7 +374,7 @@ def _optimize_trajectory(
         if verbose:        
             lax.cond(is_finished, lambda : jax.debug.print("✅ found feasible solution"), lambda : None)
         
-        return ( is_finished, is_abort, is_X_finite, variables_next, parameters, opt_t * lam, i+1, verification_state, tol_inner, t_min )
+        return ( is_finished, is_abort, is_X_finite, variables_next, parameters, opt_t_next, i+1, verification_state, tol_inner, t_min )
     
     def loop_cond(loop_par):
         
