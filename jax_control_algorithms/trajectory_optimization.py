@@ -815,6 +815,9 @@ class Solver:
 
         # status of latest run
         self.success = False
+        self.X_opt = None
+        self.U_opt = None
+        self.system_outputs = None
         
     def run(self):
         
@@ -859,6 +862,10 @@ class Solver:
         
         self.X_guess = X_opt[1:]
         self.U_guess = U_opt
+
+        self.X_opt = X_opt
+        self.U_opt = U_opt
+        self.system_outputs = system_outputs
         self.success = res['is_converged'].tolist()
         
         return solver_return
