@@ -305,10 +305,13 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
 
     if verbose:
         
-        jax.debug.print("🔄 it={i} \t (sub iter={n_iter_inner}) \t t/t_final = {opt_t} % \t eq_error/eq_tol = {max_eq_error} %",
-                        i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_final, decimals=0)),
-                        max_eq_error   = my_to_int(my_round(100 * max_eq_error / eq_tol , decimals=0)),
-                        n_iter_inner   = n_iter_inner)
+        jax.debug.print(
+            "🔄 it={i} \t (sub iter={n_iter_inner})\tt/t_final = {opt_t} %\teq_error/eq_tol = {max_eq_error} %\tbounds ok: {is_neq_converged}",
+            i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_final, decimals=0)),
+            max_eq_error   = my_to_int(my_round(100 * max_eq_error / eq_tol , decimals=0)),
+            n_iter_inner   = n_iter_inner,
+            is_neq_converged = is_neq_converged,
+        )
         
         if False:  # additional info (for debugging purposes)
             jax.debug.print(
@@ -321,7 +324,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
             )
 
     # verification_state, is_finished, is_abort, i_best            
-    return ( trace, is_converged, ), is_converged, is_abort, is_X_finite, i_best
+    return ( trace, is_converged, ), is_converged, is_eq_converged, is_abort, is_X_finite, i_best
 
 def _optimize_trajectory( 
         i, variables, parameters, opt_t, opt_c_eq, verification_state_init, lam,
@@ -352,7 +355,7 @@ def _optimize_trajectory(
         _variables_next = res.params
 
         # run callback
-        verification_state_next, is_finished, is_abort, is_X_finite, i_best = verification_fn(
+        verification_state_next, is_finished, is_eq_converged, is_abort, is_X_finite, i_best = verification_fn(
             loop_par['verification_state'], 
             loop_par['i'], 
             res, _variables_next, 
@@ -364,7 +367,16 @@ def _optimize_trajectory(
         is_finished = jnp.logical_and(is_finished, loop_par['opt_t'] >= loop_par['t_final'])
         opt_t_next = jnp.clip(loop_par['opt_t'] * lam, 0, loop_par['t_final']) 
 
-        opt_c_eq_next = loop_par['opt_c_eq'] * lam
+        # c_eq-control
+        opt_c_eq_next = jnp.where(
+            is_eq_converged,
+
+            # in case of convergence of the error below the threshold there is not need to increase c_eq
+            loop_par['opt_c_eq'],
+
+            # increase c_eq
+            loop_par['opt_c_eq'] * lam,
+        )
 
         #
         variables_next = (
