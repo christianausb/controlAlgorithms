@@ -22,5 +22,13 @@ This experiment demonstrates how to combine state and parameter estimation with 
 
 https://github.com/christianausb/controlAlgorithms/tree/main/examples/pendulum_finder
 
+## Trajectory optimization
+
+An algorithm for the collocation method using optimzers from the jaxopt library is provided.
+
+https://github.com/christianausb/controlAlgorithms/tree/main/examples/trajectory_optim_cart_pendulum.ipynb
+
+https://github.com/christianausb/controlAlgorithms/assets/4620523/27e42c6d-ac39-4cbe-b7f3-5f5f7bb1b127
+
 
 
