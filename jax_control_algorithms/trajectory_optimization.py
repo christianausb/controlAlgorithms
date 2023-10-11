@@ -412,7 +412,7 @@ def _optimize_trajectory(
         return loop_par
     
     def loop_cond(loop_par):        
-        is_n_iter_not_reached = i < max_iter_boundary_method
+        is_n_iter_not_reached = loop_par['i'] < max_iter_boundary_method
         
         is_max_iter_reached_and_not_finished = jnp.logical_and(
             jnp.logical_not(is_n_iter_not_reached),
