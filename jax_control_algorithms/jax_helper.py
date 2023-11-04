@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 from jax import lax
 
@@ -77,7 +78,6 @@ def print_if_nonfinite(text : str, x):
     def true_fn(x):
         pass
     def false_fn(x):
-        # jax.debug.breakpoint()
         jax.debug.print(text, x=x)
 
     lax.cond(is_finite, true_fn, false_fn, x)
