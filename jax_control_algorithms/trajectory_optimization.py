@@ -1,22 +1,16 @@
 import jax
 from jax import jit
 from jax import lax
-from jax import vmap
 import jax.numpy as jnp
 import jaxopt
 
 from functools import partial
 from inspect import signature
-from dataclasses import dataclass
 
 import math
 from jax_control_algorithms.common import *
-
+from jax_control_algorithms.jax_helper import *
 import time
-
-#jax.config.update('jax_enable_x64', True)
-
-
 
 
 def constraint_geq(x, v):
@@ -33,6 +27,9 @@ def constraint_leq(x, v):
 
 
 def boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
+    """
+    computes the boundary function of x
+    """
     
     # assert y_max > 0
     
@@ -64,36 +61,6 @@ def boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
     )
     
     return y
-
-
-
-def print_if_nonfinite(text : str, x):
-    is_finite = jnp.isfinite(x).all()
-    
-    def true_fn(x):
-        pass
-    def false_fn(x):
-        # jax.debug.breakpoint()
-        jax.debug.print(text, x=x)
-
-    lax.cond(is_finite, true_fn, false_fn, x)
-    
-def print_if_outofbounds(text : str, x, x_min, x_max, var_to_also_print=None):
-    is_oob = jnp.logical_and(
-        jnp.all( x > x_min ),
-        jnp.all( x < x_max ),        
-    )
-    
-    def true_fn(x):
-        pass
-    def false_fn(x):
-        # jax.debug.breakpoint()
-        jax.debug.print(text, x=x)
-        if var_to_also_print is not None:
-            jax.debug.print('var_to_also_print={x}', x=var_to_also_print)
-
-    lax.cond(is_oob, true_fn, false_fn, x)
-    
      
 
 
@@ -161,53 +128,22 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
     
-    #
-
-    OPTION = 'A'
-
-    if OPTION in ['A', 'B']:
-        power = 0
-    elif OPTION in ['C', 'D']:
-        power = 10
+    # scaling factor exponent
+    power = 0
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
     c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, power).reshape(-1)
     c_ineq = inequ_constraints(X, U, K, theta).reshape(-1)        
 
-    # equality constraints using penality method
+    # equality constraints using penality method    
+    J_equality_costs = opt_c_eq * jnp.mean(
+        ( c_eq.reshape(-1) )**2
+    )
     
-    if OPTION == 'A':
-        J1_A = opt_c_eq * jnp.mean(
-            ( c_eq.reshape(-1) )**2
-        )
-        J_equality_costs = J1_A
-    
-    if OPTION == 'B':
-        opt_t_sqrt = jnp.sqrt(opt_t)
-        J1_B = opt_c_eq * jnp.mean(
-            ( opt_t_sqrt * c_eq.reshape(-1) )**2
-        )
-        J_equality_costs = J1_B
-    
-    if OPTION == 'C':
-        J1_C = opt_c_eq/jnp.exp2(power)**2 * opt_t * jnp.mean(
-            ( c_eq.reshape(-1) )**2
-        )
-        J_equality_costs = J1_C
-    
-    if OPTION == 'D':
-        a = c_eq.reshape(-1)
-        J1_D = opt_c_eq/jnp.exp2(power)**2 * opt_t * jax.numpy.linalg.norm( a, 2 )**2 / a.shape[0]
-        J_equality_costs = J1_D
-
-#    print_if_outofbounds('WARN; J1_A - J1_B = {x}', J1_A - J1_B, -0.00001, 0.00001)
-   # print_if_outofbounds('WARN: J1_A - J1_B = {x}', J1_A - J1_B,       -0.001, 0.001, {'opt_t': opt_t, 'opt_t_sqrt': opt_t_sqrt, 'c_eq': c_eq} )
-
-    # CHOICE
-    #
-        
+    # eval cost function of problem definition        
     J_cost_function = cost_fn(f, running_cost, X, U, K, theta)
     
+    # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(
         boundary_fn(c_ineq, opt_t, 11, True)
     )
@@ -334,7 +270,7 @@ def _optimize_trajectory(
     ):
 
     # convert dtypes
-    ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = _convert_dtype(
+    ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
         ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ),
         target_dtype
     )
@@ -714,79 +650,6 @@ def optimize_trajectory(
     }
 
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
-
-
-def _convert_dtype_to_32(pytree):
-    """
-    """
-    
-    def _convert_dtype_to_32(x):
-        
-        if not isinstance(x, jnp.ndarray):
-            return jnp.float32
-        
-        dtype = x.dtype
-        
-        if dtype == jnp.float64:
-            return jnp.float32
-        
-        if dtype == jnp.float32:
-            return jnp.float32
-        
-        elif dtype == jnp.int64:
-            return jnp.int32
-        
-        elif dtype == jnp.int32:
-            return jnp.int32
-    
-    return jax.tree_map( 
-        lambda x: jnp.array(x, dtype=_convert_dtype_to_32(x)), 
-        pytree 
-    )
-
-def _convert_dtype_to_64(pytree):
-    """
-    """
-    
-    def _convert_dtype_to_64(x):
-        
-        if not isinstance(x, jnp.ndarray):
-            return jnp.float64
-        
-        dtype = x.dtype
-        
-        if dtype == jnp.float64:
-            return jnp.float64
-        
-        if dtype == jnp.float32:
-            return jnp.float64
-        
-        elif dtype == jnp.int64:
-            return jnp.int64
-        
-        elif dtype == jnp.int32:
-            return jnp.int64
-    
-    return jax.tree_map( 
-        lambda x: jnp.array(x, dtype=_convert_dtype_to_64(x)), 
-        pytree 
-    )
-
-def _convert_dtype(pytree, target_dtype = jnp.float32 ):
-    """
-        t = {
-            'a': jnp.array([1,-0.5], dtype=jnp.float64),
-            'b': jnp.array([1,-0.5], dtype=jnp.int32),
-            'c': 0.1
-        }
-
-        _convert_dtype(t, jnp.float32), _convert_dtype(t, jnp.float64)
-    """
-    if target_dtype == jnp.float32:
-        return _convert_dtype_to_32(pytree)
-    
-    elif target_dtype == jnp.float64:
-        return _convert_dtype_to_64(pytree)
 
 
 
