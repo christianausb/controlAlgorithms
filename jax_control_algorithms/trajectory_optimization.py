@@ -393,23 +393,51 @@ def _optimize_trajectory(
     return loop_par['variables'], loop_par['opt_t'], loop_par['opt_c_eq'], n_iter, loop_par['verification_state']
 
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11,  18, 19 ) )
+
+def _get_sizes(X_guess, U_guess, x0):
+    n_steps = U_guess.shape[0]
+    n_states = x0.shape[0]
+    n_inputs = U_guess.shape[1]
+
+    return n_steps, n_states, n_inputs
+
+def _verify_shapes(X_guess, U_guess, x0):
+    # check for correct parameters
+    assert len(X_guess.shape) == 2
+    assert len(U_guess.shape) == 2
+    assert len(x0.shape) == 1
+
+    n_steps, n_states, n_inputs = _get_sizes(X_guess, U_guess, x0)
+    
+    assert U_guess.shape[0] == n_steps
+    assert n_inputs >= 1
+    
+    assert X_guess.shape[0] == n_steps
+    assert X_guess.shape[1] == n_states
+
+    return
+
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5,   8, 9, 10,  17, 18))
 def optimize_trajectory(
+    # static
     f, 
     g,
     terminal_state_eq_constraints,
     inequ_constraints,
     running_cost,
+    initial_guess,
     
-    x0, 
-    X_guess,
-    U_guess, 
-    theta,
+    # dynamic
+    x0,     # 6
+    theta,  # 7
     
-    max_iter_boundary_method = 40,
-    max_iter_inner = 5000,
+    # static
+    max_iter_boundary_method = 40, # 8
+    max_iter_inner = 5000,         # 9
+
     verbose = True,
     
+    # dynamic
     c_eq_init = 100.0,
     opt_t_init = 0.5, 
     lam = 1.6,
@@ -418,8 +446,10 @@ def optimize_trajectory(
     t_final = 100.0,
     tol_inner = 0.0001,
 
+    # static
     enable_float64 = True,
     max_float32_iterations = 0
+#    max_trace_entries = 100
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
@@ -456,11 +486,16 @@ def optimize_trajectory(
             x0:
                 a vector containing the initial state of the system described by f
             
-            X_guess: (n_steps, n_states)
-                an initial guess for a solution to the optimal state trajectory
-                
-            U_guess: (n_steps, n_inputs)
-                an initial guess for a solution to the optimal sequence of control variables
+            initial_guess:
+                a dictionary holding an initial guess for a solution that contains the following fields
+
+                    X_guess: (n_steps, n_states)
+                        an initial guess for a solution to the optimal state trajectory
+                        
+                    U_guess: (n_steps, n_inputs)
+                        an initial guess for a solution to the optimal sequence of control variables
+
+                or a callable function the returns such a dictionary. 
             
             theta: (JAX-pytree)
                 parameters to the system model that are forwarded to f, g, cost_fn
@@ -516,21 +551,25 @@ def optimize_trajectory(
             res: solver-internal information that can be unpacked with unpack_res()
             
     """
+
+    if verbose:
+        print('compiling optimizer')
+
+    #
+    if callable(initial_guess):
+        initial_guess = initial_guess(x0, theta)
+
+    # if initial_guess is not dict:
+    #     print('got ', initial_guess)
+    #     raise BaseException('parameter initial_guess must be either a callable or a dictionary')
+
+    X_guess, U_guess = initial_guess['X_guess'], initial_guess['U_guess']
     
-    # check for correct parameters
-    assert len(X_guess.shape) == 2
-    assert len(U_guess.shape) == 2
-    assert len(x0.shape) == 1
-        
-    n_steps = U_guess.shape[0]
-    n_states = x0.shape[0]
-    n_inputs = U_guess.shape[1]
-    
-    assert U_guess.shape[0] == n_steps
-    assert n_inputs >= 1
-    
-    assert X_guess.shape[0] == n_steps
-    assert X_guess.shape[1] == n_states
+    # verify types and shapes
+    _verify_shapes(X_guess, U_guess, x0)
+
+    #
+    n_steps, n_states, n_inputs = _get_sizes(X_guess, U_guess, x0)
     
     assert type(max_iter_boundary_method) is int
     assert type(max_iter_inner) is int
@@ -657,11 +696,36 @@ class Solver:
     def __init__(self, problem_def_fn, use_continuation=False):
         self.problem_def_fn = problem_def_fn
         
-        (
-            self.f, self.g, self.running_cost, 
-            self.terminal_state_eq_constraints, self.inequ_constraints, 
-            self.theta, self.x0, self.make_guess
-        ) = problem_def_fn()
+        # get problem definition
+        _problem_definition = problem_def_fn()
+
+        if type(_problem_definition) is tuple:
+            # for compatibility / remove this
+            (
+                f, g, running_cost, 
+                terminal_state_eq_constraints, inequ_constraints, 
+                theta, x0, make_guess
+
+            ) = _problem_definition
+
+            self.problem_definition = {
+                'f' : f,
+                'g' : g,
+                'running_cost' : running_cost,
+                'terminal_state_eq_constraints': terminal_state_eq_constraints,
+                'inequ_constraints' : inequ_constraints,
+
+                'make_guess' : make_guess,
+
+                'theta' : theta,
+                'x0' : x0,
+            } 
+
+
+        elif type(_problem_definition) is dict:
+            self.problem_definition = _problem_definition
+
+
 
         self.max_iter_boundary_method = 40
         self.max_iter_inner = 5000
@@ -676,12 +740,34 @@ class Solver:
         
         self.tol_inner = 0.0001
         
-        # get n_steps
-        X_guess, _   = self.make_guess(self.x0, self.theta)
-        self.n_steps = X_guess.shape[0]
+
         
-        # make memory for guess
-        self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
+        # # make memory for guess
+        # # self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
+
+        initial_guess = self.problem_definition['make_guess'](
+            self.problem_definition['x0'], self.problem_definition['theta']
+        )
+
+        # if type(initial_guess) is tuple and len(initial_guess) == 2:
+        #     X_guess, U_guess = initial_guess
+        #     self.initial_guess = {
+        #         'U_guess' : X_guess,
+        #         'U_guess' : U_guess,
+        #     }
+
+        # elif type(initial_guess) is dict:
+        #     assert 'U_guess' in initial_guess
+        #     assert 'X_guess' in initial_guess
+
+        #     self.initial_guess = initial_guess
+
+        # else:
+        #     raise BaseException('initial guess')
+
+
+        # derive the number of sampling instants from the initial guess
+        self.n_steps = initial_guess['X_guess'].shape[0]
         
         self.use_continuation = use_continuation
 
@@ -694,24 +780,21 @@ class Solver:
         self.U_opt = None
         self.system_outputs = None
         
-    def run(self):
-        
-        # run
-        if not self.use_continuation:
-            self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
-        
+    
+
+    def run(self):        
         start_time = time.time()
         solver_return = optimize_trajectory(
-            self.f, 
-            self.g,
-            self.terminal_state_eq_constraints,
-            self.inequ_constraints,
-            self.running_cost,
-            self.x0,
+            self.problem_definition['f'], 
+            self.problem_definition['g'],
+            self.problem_definition['terminal_state_eq_constraints'], # self.terminal_state_eq_constraints,
+            self.problem_definition['inequ_constraints'], #self.inequ_constraints,
+            self.problem_definition['running_cost'], #self.running_cost,
             
-            X_guess       = self.X_guess,
-            U_guess       = self.U_guess, 
-            theta         = self.theta,
+            self.problem_definition['make_guess'], # use callable to generate guess # self.initial_guess,
+
+            self.problem_definition['x0'], # self.x0,
+            theta = self.problem_definition['theta'], # self.theta,
             
             max_iter_boundary_method = self.max_iter_boundary_method,
             max_iter_inner           = self.max_iter_inner,
@@ -721,7 +804,7 @@ class Solver:
             opt_t_init    = self.opt_t_init,
             lam           = self.lam,
             eq_tol        = self.eq_tol,
-            t_final         = self.t_final,
+            t_final       = self.t_final,
             tol_inner     = self.tol_inner,
 
             enable_float64         = self.enable_float64,
@@ -734,9 +817,6 @@ class Solver:
             print(f"time to run: {elapsed} seconds")
         
         X_opt, U_opt, system_outputs, res = solver_return
-        
-        self.X_guess = X_opt[1:]
-        self.U_guess = U_opt
 
         self.X_opt = X_opt
         self.U_opt = U_opt
@@ -745,6 +825,10 @@ class Solver:
         
         return solver_return
     
+@property
+def theta(self, theta):
+    self.problem_definition['theta'] = theta
+
 
 def unpack_res(res):
     """
