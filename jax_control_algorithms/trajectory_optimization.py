@@ -246,23 +246,37 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
                 is_eq_converged=is_eq_converged,
                 is_neq_converged=is_neq_converged,
             )
-
     
     # verification_state, is_finished, is_abort, i_best            
     return verification_state_next, is_converged, is_eq_converged, is_abort, is_X_finite, i_best
 
 def _optimize_trajectory( 
-        i, variables, parameters, opt_t, opt_c_eq, verification_state_init, lam,
-        tol_inner, t_final, max_iter_boundary_method,
-        max_iter_inner, objective_fn, verification_fn,
+        i, variables, parameters, opt_t, opt_c_eq, verification_state_init, 
+        
+        # lam,
+        # tol_inner, 
+        # t_final, 
+        # max_iter_boundary_method,
+        # max_iter_inner,
+        
+        solver_settings,
+
+        objective_fn, verification_fn,
         verbose, print_errors, target_dtype
     ):
 
     # convert dtypes
     ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
-        ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ),
+        ( 
+            variables, parameters, 
+            opt_t, opt_c_eq, 
+            verification_state_init, 
+            solver_settings['lam'], solver_settings['tol_inner'], 
+        ),
         target_dtype
     )
+
+    # _solver_settings = convert_dtype(solver_settings, target_dtype)
 
     #
     # loop:
@@ -275,7 +289,9 @@ def _optimize_trajectory(
         parameters_ = loop_par['parameters'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
 
         # run optimization
-        gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=max_iter_inner)
+        gd = jaxopt.BFGS(
+            fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=solver_settings['max_iter_inner']
+            )
         res = gd.run(loop_par['variables'], parameters=parameters_)
         _variables_next = res.params
 
@@ -337,7 +353,7 @@ def _optimize_trajectory(
         return loop_par
     
     def loop_cond(loop_par):        
-        is_n_iter_not_reached = loop_par['i'] < max_iter_boundary_method
+        is_n_iter_not_reached = loop_par['i'] < solver_settings['max_iter_boundary_method']
         
         is_max_iter_reached_and_not_finished = jnp.logical_and(
             jnp.logical_not(is_n_iter_not_reached),
@@ -364,7 +380,7 @@ def _optimize_trajectory(
     loop_par = {
         'is_finished' : jnp.array(False, dtype=jnp.bool_),
         'is_abort'    : jnp.array(False, dtype=jnp.bool_),
-        'is_X_finite' : jnp.array(True, dtype=jnp.bool_),
+        'is_X_finite' : jnp.array(True,  dtype=jnp.bool_),
         'variables'     : variables, 
         'parameters' : parameters, 
         'opt_t' : opt_t, 
@@ -372,7 +388,7 @@ def _optimize_trajectory(
         'i' : i, 
         'verification_state' : verification_state_init, 
         'tol_inner' : tol_inner, 
-        't_final' : t_final,
+        't_final' : solver_settings['t_final'],
     }
 
     loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
@@ -406,7 +422,22 @@ def _verify_shapes(X_guess, U_guess, x0):
 
     return
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5,   8,    10,  17, 18))
+def get_default_solver_settings():
+
+    solver_settings = {
+        'max_iter_boundary_method' : 40,
+        'max_iter_inner' : 5000,
+        'c_eq_init' : 100.0,
+        'opt_t_init' : 0.5, 
+        'lam' : 1.6,    
+        'eq_tol' : 0.0001,
+        't_final' : 100.0,
+        'tol_inner' : 0.0001,
+    }
+    
+    return solver_settings
+
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5,   9, 10, 11, 12))
 def optimize_trajectory(
     # static
     f, 
@@ -414,31 +445,19 @@ def optimize_trajectory(
     terminal_state_eq_constraints,
     inequ_constraints,
     running_cost,
-    initial_guess,
+    initial_guess,   # 5
     
     # dynamic
-    x0,     # 6
-    theta,  # 7
+    x0,              # 6
+    theta,           # 7
     
-    # static
-    max_iter_boundary_method = 40, # 8
-    max_iter_inner = 5000,         # 9
-
-    verbose = True,
-    
-    # dynamic
-    c_eq_init = 100.0,
-    opt_t_init = 0.5, 
-    lam = 1.6,
-    
-    eq_tol  = 0.0001,
-    t_final = 100.0,
-    tol_inner = 0.0001,
+    solver_settings, # 8
 
     # static
     enable_float64 = True,
     max_float32_iterations = 0,
     max_trace_entries = 100,
+    verbose = True,
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
@@ -576,13 +595,13 @@ def optimize_trajectory(
     variables         = (X_guess, U_guess)
 
     # pass static parameters into objective function
-    objective_ = partial(objective_penality_method, static_parameters=static_parameters)
+    objective_          = partial(objective_penality_method,          static_parameters=static_parameters)
     feasibility_metric_ = partial(feasibility_metric_penality_method, static_parameters=static_parameters)
 
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
         _verify_step, 
-        feasibility_metric_fn=feasibility_metric_, t_final=t_final, eq_tol=eq_tol, verbose=verbose
+        feasibility_metric_fn=feasibility_metric_, t_final=solver_settings['t_final'], eq_tol=solver_settings['eq_tol'], verbose=verbose
     )
     
     # trace vars
@@ -592,8 +611,8 @@ def optimize_trajectory(
     # iterate
     #
 
-    opt_t = opt_t_init
-    opt_c_eq = c_eq_init
+    opt_t    = solver_settings['opt_t_init']
+    opt_c_eq = solver_settings['c_eq_init']
     i = 0
     verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
@@ -604,11 +623,9 @@ def optimize_trajectory(
             variables, parameters, 
             jnp.array(opt_t, dtype=jnp.float32),
             jnp.array(opt_c_eq, dtype=jnp.float32),
-            verification_state, lam,
-            tol_inner,
-            t_final, 
-            max_float32_iterations,
-            max_iter_inner, objective_, verification_fn_,
+            verification_state, 
+            solver_settings,
+            objective_, verification_fn_,
             verbose, 
             False, # show_errors
             target_dtype=jnp.float32
@@ -626,11 +643,9 @@ def optimize_trajectory(
             variables, parameters, 
             jnp.array(opt_t, dtype=jnp.float64),
             jnp.array(opt_c_eq, dtype=jnp.float64),
-            verification_state, lam,
-            tol_inner, 
-            t_final, 
-            max_iter_boundary_method - i, 
-            max_iter_inner, objective_, verification_fn_,
+            verification_state, 
+            solver_settings,            
+            objective_, verification_fn_,
             verbose, 
             True if verbose else False, # show_errors
             target_dtype=jnp.float64
@@ -709,18 +724,8 @@ class Solver:
         elif type(_problem_definition) is dict:
             self.problem_definition = _problem_definition
 
-        self.max_iter_boundary_method = 40
-        self.max_iter_inner = 5000
-        self.verbose = True
-                
-        self.c_eq_init = 100
-        self.opt_t_init    = 0.5
-        self.lam = 1.6
 
-        self.eq_tol  = 0.0001
-        self.t_final = 100.0
-        
-        self.tol_inner = 0.0001
+        self.solver_settings = get_default_solver_settings()
         
         initial_guess = self.problem_definition['make_guess'](
             self.problem_definition['x0'], self.problem_definition['theta']
@@ -733,6 +738,7 @@ class Solver:
 
         self.enable_float64 = True
         self.max_float32_iterations = 0
+        self.verbose = True
 
         # status of latest run
         self.success = False
@@ -752,21 +758,24 @@ class Solver:
             self.problem_definition['make_guess'], # use callable to generate guess # self.initial_guess,
 
             self.problem_definition['x0'], # self.x0,
-            theta = self.problem_definition['theta'], # self.theta,
-            
-            max_iter_boundary_method = self.max_iter_boundary_method,
-            max_iter_inner           = self.max_iter_inner,
-            verbose                  = self.verbose,
-            
-            c_eq_init = self.c_eq_init,
-            opt_t_init    = self.opt_t_init,
-            lam           = self.lam,
-            eq_tol        = self.eq_tol,
-            t_final       = self.t_final,
-            tol_inner     = self.tol_inner,
+            self.problem_definition['theta'], # self.theta,
 
-            enable_float64         = self.enable_float64,
-            max_float32_iterations = self.max_float32_iterations,
+            self.solver_settings,
+            
+            # max_iter_boundary_method = self.max_iter_boundary_method,
+            # max_iter_inner           = self.max_iter_inner,
+            
+            # c_eq_init = self.c_eq_init,
+            # opt_t_init    = self.opt_t_init,
+            # lam           = self.lam,
+            # eq_tol        = self.eq_tol,
+            # t_final       = self.t_final,
+            # tol_inner     = self.tol_inner,
+
+            enable_float64           = self.enable_float64,
+            max_float32_iterations   = self.max_float32_iterations,
+            max_trace_entries        = 100,
+            verbose                  = self.verbose,
         )
         end_time = time.time()
         elapsed = end_time - start_time
