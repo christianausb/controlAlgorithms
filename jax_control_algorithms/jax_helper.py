@@ -98,3 +98,86 @@ def print_if_outofbounds(text : str, x, x_min, x_max, var_to_also_print=None):
 
     lax.cond(is_oob, true_fn, false_fn, x)
     
+def my_round(x, decimals=2):
+    scale = jnp.array(10.0**decimals, dtype=jnp.float64)
+    return (
+        jnp.array(jnp.round( scale * x, decimals=0 ), dtype=jnp.int32) / scale
+    )
+
+def my_to_int(x):
+    return jnp.array(x, dtype=jnp.int32)
+
+
+#
+# traces
+#
+
+def init_trace_memory(max_trace_entries, dtypes = [jnp.float32, jnp.int32], init_values=[jnp.nan, -1] ):
+    
+    trace_data = [
+        v * jnp.ones(max_trace_entries, dtype=dtype)
+        for dtype, v in zip(dtypes, init_values)
+    ]
+    
+    counter = jnp.array(0, dtype=jnp.int32)
+    
+    return (counter, trace_data)
+
+def append_to_trace(traces, values_to_append=(1.2, 4) ):
+    counter = traces[0]
+    trace_data = traces[1] 
+    
+    is_memory_not_full = counter < trace_data[0].shape[0]
+    
+    traces_next = jax.tree_map(
+        lambda x, y: jnp.where(is_memory_not_full, x, y),
+        _append_to_trace(traces, values_to_append), 
+        (counter, trace_data)
+    )
+    
+    return traces_next, is_memory_not_full
+    
+    
+def _append_to_trace(traces, values_to_append ):
+    
+    counter = traces[0]
+    trace_data = traces[1] 
+    
+    trace_data_next = [
+        trace_data[i].at[counter].set(v)
+        for i, v in enumerate(values_to_append)
+    ]
+    
+    counter_next = counter + 1
+    
+    return (counter_next, trace_data_next)
+        
+def get_trace_data(traces):
+    trace_data = traces[1] 
+    return trace_data
+    
+
+# set-up
+traces = init_trace_memory(10, dtypes = [jnp.float32, jnp.int32], init_values=[-10, -1])
+trace_data = get_trace_data(traces)
+
+# assert
+assert jnp.all( trace_data[0] == -10 )
+assert jnp.all( trace_data[1] == -1 )
+
+# act
+traces, is_ok = append_to_trace(traces, (1.1, 2))
+trace_data = get_trace_data(traces)
+
+# assert
+assert is_ok
+assert trace_data[0][0] == 1.1
+assert trace_data[1][0] == 2
+
+for i in range(9):
+    traces, is_ok = append_to_trace(traces, (1.1, 2))
+    assert is_ok
+
+traces, is_ok = append_to_trace(traces, (1.1, 2))
+assert not is_ok
+
