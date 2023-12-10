@@ -199,11 +199,10 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     )
     
     # trace
-    trace_next = ( 
-        trace[0].at[i].set(max_eq_error),
-        trace[1].at[i].set(max_ineq_error),
-        trace[2].at[i].set(n_iter_inner),
-    )
+    trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, max_ineq_error, n_iter_inner ) )
+    trace_data = get_trace_data(trace_next)
+
+    verification_state_next = ( trace_next, is_converged, )
 
     # As being in the 2nd iteration, compare to prev. metric and see if it got smaller
     is_metric_check_active = i > 2
@@ -221,7 +220,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         (i, trace, ) = par
         return False
 
-    is_abort_because_of_metric = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace, ) )
+    is_abort_because_of_metric = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace_data, ) )
     i_best = None    
 
     is_abort = jnp.logical_or(
@@ -229,18 +228,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         is_abort_because_of_metric
     )
 
-    def my_round(x, decimals=2):
-        scale = jnp.array(10.0**decimals, dtype=jnp.float64)
-        return (
-            jnp.array(jnp.round( scale * x, decimals=0 ), dtype=jnp.int32) / scale
-        )
-    
-    def my_to_int(x):
-        return jnp.array(x, dtype=jnp.int32)
-
-
     if verbose:
-        
         jax.debug.print(
             "🔄 it={i} \t (sub iter={n_iter_inner})\tt/t_final = {opt_t} %\teq_error/eq_tol = {max_eq_error} %\tbounds ok: {is_neq_converged}",
             i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_final, decimals=0)),
@@ -258,22 +246,37 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
                 is_eq_converged=is_eq_converged,
                 is_neq_converged=is_neq_converged,
             )
-
+    
     # verification_state, is_finished, is_abort, i_best            
-    return ( trace, is_converged, ), is_converged, is_eq_converged, is_abort, is_X_finite, i_best
+    return verification_state_next, is_converged, is_eq_converged, is_abort, is_X_finite, i_best
 
 def _optimize_trajectory( 
-        i, variables, parameters, opt_t, opt_c_eq, verification_state_init, lam,
-        tol_inner, t_final, max_iter_boundary_method,
-        max_iter_inner, objective_fn, verification_fn,
+        i, variables, parameters, opt_t, opt_c_eq, verification_state_init, 
+        
+        # lam,
+        # tol_inner, 
+        # t_final, 
+        # max_iter_boundary_method,
+        # max_iter_inner,
+        
+        solver_settings,
+
+        objective_fn, verification_fn,
         verbose, print_errors, target_dtype
     ):
 
     # convert dtypes
     ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
-        ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ),
+        ( 
+            variables, parameters, 
+            opt_t, opt_c_eq, 
+            verification_state_init, 
+            solver_settings['lam'], solver_settings['tol_inner'], 
+        ),
         target_dtype
     )
+
+    # _solver_settings = convert_dtype(solver_settings, target_dtype)
 
     #
     # loop:
@@ -286,7 +289,9 @@ def _optimize_trajectory(
         parameters_ = loop_par['parameters'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
 
         # run optimization
-        gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=max_iter_inner)
+        gd = jaxopt.BFGS(
+            fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=solver_settings['max_iter_inner']
+            )
         res = gd.run(loop_par['variables'], parameters=parameters_)
         _variables_next = res.params
 
@@ -348,7 +353,7 @@ def _optimize_trajectory(
         return loop_par
     
     def loop_cond(loop_par):        
-        is_n_iter_not_reached = loop_par['i'] < max_iter_boundary_method
+        is_n_iter_not_reached = loop_par['i'] < solver_settings['max_iter_boundary_method']
         
         is_max_iter_reached_and_not_finished = jnp.logical_and(
             jnp.logical_not(is_n_iter_not_reached),
@@ -375,7 +380,7 @@ def _optimize_trajectory(
     loop_par = {
         'is_finished' : jnp.array(False, dtype=jnp.bool_),
         'is_abort'    : jnp.array(False, dtype=jnp.bool_),
-        'is_X_finite' : jnp.array(True, dtype=jnp.bool_),
+        'is_X_finite' : jnp.array(True,  dtype=jnp.bool_),
         'variables'     : variables, 
         'parameters' : parameters, 
         'opt_t' : opt_t, 
@@ -383,7 +388,7 @@ def _optimize_trajectory(
         'i' : i, 
         'verification_state' : verification_state_init, 
         'tol_inner' : tol_inner, 
-        't_final' : t_final,
+        't_final' : solver_settings['t_final'],
     }
 
     loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
@@ -393,33 +398,66 @@ def _optimize_trajectory(
     return loop_par['variables'], loop_par['opt_t'], loop_par['opt_c_eq'], n_iter, loop_par['verification_state']
 
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4,  9, 10, 11,  18, 19 ) )
+
+def _get_sizes(X_guess, U_guess, x0):
+    n_steps = U_guess.shape[0]
+    n_states = x0.shape[0]
+    n_inputs = U_guess.shape[1]
+
+    return n_steps, n_states, n_inputs
+
+def _verify_shapes(X_guess, U_guess, x0):
+    # check for correct parameters
+    assert len(X_guess.shape) == 2
+    assert len(U_guess.shape) == 2
+    assert len(x0.shape) == 1
+
+    n_steps, n_states, n_inputs = _get_sizes(X_guess, U_guess, x0)
+    
+    assert U_guess.shape[0] == n_steps
+    assert n_inputs >= 1
+    
+    assert X_guess.shape[0] == n_steps
+    assert X_guess.shape[1] == n_states
+
+    return
+
+def get_default_solver_settings():
+
+    solver_settings = {
+        'max_iter_boundary_method' : 40,
+        'max_iter_inner' : 5000,
+        'c_eq_init' : 100.0,
+        'opt_t_init' : 0.5, 
+        'lam' : 1.6,    
+        'eq_tol' : 0.0001,
+        't_final' : 100.0,
+        'tol_inner' : 0.0001,
+    }
+    
+    return solver_settings
+
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5,   9, 10, 11, 12))
 def optimize_trajectory(
+    # static
     f, 
     g,
     terminal_state_eq_constraints,
     inequ_constraints,
     running_cost,
+    initial_guess,   # 5
     
-    x0, 
-    X_guess,
-    U_guess, 
-    theta,
+    # dynamic
+    x0,              # 6
+    theta,           # 7
     
-    max_iter_boundary_method = 40,
-    max_iter_inner = 5000,
-    verbose = True,
-    
-    c_eq_init = 100.0,
-    opt_t_init = 0.5, 
-    lam = 1.6,
-    
-    eq_tol  = 0.0001,
-    t_final = 100.0,
-    tol_inner = 0.0001,
+    solver_settings, # 8
 
+    # static
     enable_float64 = True,
-    max_float32_iterations = 0
+    max_float32_iterations = 0,
+    max_trace_entries = 100,
+    verbose = True,
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
@@ -456,11 +494,16 @@ def optimize_trajectory(
             x0:
                 a vector containing the initial state of the system described by f
             
-            X_guess: (n_steps, n_states)
-                an initial guess for a solution to the optimal state trajectory
-                
-            U_guess: (n_steps, n_inputs)
-                an initial guess for a solution to the optimal sequence of control variables
+            initial_guess:
+                a dictionary holding an initial guess for a solution that contains the following fields
+
+                    X_guess: (n_steps, n_states)
+                        an initial guess for a solution to the optimal state trajectory
+                        
+                    U_guess: (n_steps, n_inputs)
+                        an initial guess for a solution to the optimal sequence of control variables
+
+                or a callable function the returns such a dictionary. 
             
             theta: (JAX-pytree)
                 parameters to the system model that are forwarded to f, g, cost_fn
@@ -504,6 +547,9 @@ def optimize_trajectory(
             max_float32_iterations: int
                 apply at max max_float32_iterations number of iterations using 32-bit floating
                 point precision enabling faster computation (default = 0)
+
+            max_trace_entries
+                The number of elements in the tracing memory 
             
             
         Returns: X_opt, U_opt, system_outputs, res
@@ -516,24 +562,24 @@ def optimize_trajectory(
             res: solver-internal information that can be unpacked with unpack_res()
             
     """
+
+    if verbose:
+        print('compiling optimizer')
+
+    #
+    if callable(initial_guess):
+        initial_guess = initial_guess(x0, theta)
+
+    X_guess, U_guess = initial_guess['X_guess'], initial_guess['U_guess']
     
-    # check for correct parameters
-    assert len(X_guess.shape) == 2
-    assert len(U_guess.shape) == 2
-    assert len(x0.shape) == 1
-        
-    n_steps = U_guess.shape[0]
-    n_states = x0.shape[0]
-    n_inputs = U_guess.shape[1]
+    # verify types and shapes
+    _verify_shapes(X_guess, U_guess, x0)
+
+    #
+    n_steps, n_states, n_inputs = _get_sizes(X_guess, U_guess, x0)
     
-    assert U_guess.shape[0] == n_steps
-    assert n_inputs >= 1
-    
-    assert X_guess.shape[0] == n_steps
-    assert X_guess.shape[1] == n_states
-    
-    assert type(max_iter_boundary_method) is int
-    assert type(max_iter_inner) is int
+    # assert type(max_iter_boundary_method) is int
+    assert type(max_trace_entries) is int
     
     #
     if verbose:
@@ -544,33 +590,29 @@ def optimize_trajectory(
     K = jnp.arange(n_steps)
 
     # pack parameters and variables
-    parameters = (K, theta, x0, )
+    parameters        = (K, theta, x0, )
     static_parameters = (f, terminal_state_eq_constraints, inequ_constraints, running_cost)
-    variables = (X_guess, U_guess)
+    variables         = (X_guess, U_guess)
 
     # pass static parameters into objective function
-    objective_ = partial(objective_penality_method, static_parameters=static_parameters)
+    objective_          = partial(objective_penality_method,          static_parameters=static_parameters)
     feasibility_metric_ = partial(feasibility_metric_penality_method, static_parameters=static_parameters)
 
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
         _verify_step, 
-        feasibility_metric_fn=feasibility_metric_, t_final=t_final, eq_tol=eq_tol, verbose=verbose
+        feasibility_metric_fn=feasibility_metric_, t_final=solver_settings['t_final'], eq_tol=solver_settings['eq_tol'], verbose=verbose
     )
     
     # trace vars
-    trace_init = ( 
-        math.nan*jnp.zeros(max_iter_boundary_method, dtype=jnp.float32),
-        math.nan*jnp.zeros(max_iter_boundary_method, dtype=jnp.float32), 
-        -jnp.ones(max_iter_boundary_method, dtype=jnp.int32), 
-    )
+    trace_init = init_trace_memory(max_trace_entries, (jnp.float32, jnp.float32, jnp.int32), ( jnp.nan, jnp.nan, -1 ) )
 
     #
     # iterate
     #
 
-    opt_t = opt_t_init
-    opt_c_eq = c_eq_init
+    opt_t    = solver_settings['opt_t_init']
+    opt_c_eq = solver_settings['c_eq_init']
     i = 0
     verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
@@ -581,11 +623,9 @@ def optimize_trajectory(
             variables, parameters, 
             jnp.array(opt_t, dtype=jnp.float32),
             jnp.array(opt_c_eq, dtype=jnp.float32),
-            verification_state, lam,
-            tol_inner,
-            t_final, 
-            max_float32_iterations,
-            max_iter_inner, objective_, verification_fn_,
+            verification_state, 
+            solver_settings,
+            objective_, verification_fn_,
             verbose, 
             False, # show_errors
             target_dtype=jnp.float32
@@ -603,11 +643,9 @@ def optimize_trajectory(
             variables, parameters, 
             jnp.array(opt_t, dtype=jnp.float64),
             jnp.array(opt_c_eq, dtype=jnp.float64),
-            verification_state, lam,
-            tol_inner, 
-            t_final, 
-            max_iter_boundary_method - i, 
-            max_iter_inner, objective_, verification_fn_,
+            verification_state, 
+            solver_settings,            
+            objective_, verification_fn_,
             verbose, 
             True if verbose else False, # show_errors
             target_dtype=jnp.float64
@@ -617,7 +655,7 @@ def optimize_trajectory(
 
     n_iter = i
     variables_star = variables
-    trace = verification_state[0]
+    trace = get_trace_data( verification_state[0] )
 
     is_converged = verification_state[1]
 
@@ -652,41 +690,52 @@ def optimize_trajectory(
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
 
 
-
 class Solver:
     def __init__(self, problem_def_fn, use_continuation=False):
         self.problem_def_fn = problem_def_fn
         
-        (
-            self.f, self.g, self.running_cost, 
-            self.terminal_state_eq_constraints, self.inequ_constraints, 
-            self.theta, self.x0, self.make_guess
-        ) = problem_def_fn()
+        # get problem definition
+        _problem_definition = problem_def_fn()
 
-        self.max_iter_boundary_method = 40
-        self.max_iter_inner = 5000
-        self.verbose = True
-                
-        self.c_eq_init = 100
-        self.opt_t_init    = 0.5
-        self.lam = 1.6
+        if type(_problem_definition) is tuple:
+            # for compatibility / remove this
+            (
+                f, g, running_cost, 
+                terminal_state_eq_constraints, inequ_constraints, 
+                theta, x0, make_guess
 
-        self.eq_tol  = 0.0001
-        self.t_final = 100.0
+            ) = _problem_definition
+
+            self.problem_definition = {
+                'f' : f,
+                'g' : g,
+                'running_cost' : running_cost,
+                'terminal_state_eq_constraints': terminal_state_eq_constraints,
+                'inequ_constraints' : inequ_constraints,
+                'make_guess' : make_guess,
+                'theta' : theta,
+                'x0' : x0,
+            } 
+
+
+        elif type(_problem_definition) is dict:
+            self.problem_definition = _problem_definition
+
+
+        self.solver_settings = get_default_solver_settings()
         
-        self.tol_inner = 0.0001
-        
-        # get n_steps
-        X_guess, _   = self.make_guess(self.x0, self.theta)
-        self.n_steps = X_guess.shape[0]
-        
-        # make memory for guess
-        self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
+        initial_guess = self.problem_definition['make_guess'](
+            self.problem_definition['x0'], self.problem_definition['theta']
+        )
+
+        # derive the number of sampling instants from the initial guess
+        self.n_steps = initial_guess['X_guess'].shape[0]
         
         self.use_continuation = use_continuation
 
         self.enable_float64 = True
         self.max_float32_iterations = 0
+        self.verbose = True
 
         # status of latest run
         self.success = False
@@ -694,38 +743,36 @@ class Solver:
         self.U_opt = None
         self.system_outputs = None
         
-    def run(self):
-        
-        # run
-        if not self.use_continuation:
-            self.X_guess, self.U_guess = self.make_guess(self.x0, self.theta)
-        
+    def run(self):        
         start_time = time.time()
         solver_return = optimize_trajectory(
-            self.f, 
-            self.g,
-            self.terminal_state_eq_constraints,
-            self.inequ_constraints,
-            self.running_cost,
-            self.x0,
+            self.problem_definition['f'], 
+            self.problem_definition['g'],
+            self.problem_definition['terminal_state_eq_constraints'], # self.terminal_state_eq_constraints,
+            self.problem_definition['inequ_constraints'], #self.inequ_constraints,
+            self.problem_definition['running_cost'], #self.running_cost,
             
-            X_guess       = self.X_guess,
-            U_guess       = self.U_guess, 
-            theta         = self.theta,
-            
-            max_iter_boundary_method = self.max_iter_boundary_method,
-            max_iter_inner           = self.max_iter_inner,
-            verbose                  = self.verbose,
-            
-            c_eq_init = self.c_eq_init,
-            opt_t_init    = self.opt_t_init,
-            lam           = self.lam,
-            eq_tol        = self.eq_tol,
-            t_final         = self.t_final,
-            tol_inner     = self.tol_inner,
+            self.problem_definition['make_guess'], # use callable to generate guess # self.initial_guess,
 
-            enable_float64         = self.enable_float64,
-            max_float32_iterations = self.max_float32_iterations,
+            self.problem_definition['x0'], # self.x0,
+            self.problem_definition['theta'], # self.theta,
+
+            self.solver_settings,
+            
+            # max_iter_boundary_method = self.max_iter_boundary_method,
+            # max_iter_inner           = self.max_iter_inner,
+            
+            # c_eq_init = self.c_eq_init,
+            # opt_t_init    = self.opt_t_init,
+            # lam           = self.lam,
+            # eq_tol        = self.eq_tol,
+            # t_final       = self.t_final,
+            # tol_inner     = self.tol_inner,
+
+            enable_float64           = self.enable_float64,
+            max_float32_iterations   = self.max_float32_iterations,
+            max_trace_entries        = 100,
+            verbose                  = self.verbose,
         )
         end_time = time.time()
         elapsed = end_time - start_time
@@ -734,9 +781,6 @@ class Solver:
             print(f"time to run: {elapsed} seconds")
         
         X_opt, U_opt, system_outputs, res = solver_return
-        
-        self.X_guess = X_opt[1:]
-        self.U_guess = U_opt
 
         self.X_opt = X_opt
         self.U_opt = U_opt
@@ -745,6 +789,10 @@ class Solver:
         
         return solver_return
     
+@property
+def theta(self, theta):
+    self.problem_definition['theta'] = theta
+
 
 def unpack_res(res):
     """
