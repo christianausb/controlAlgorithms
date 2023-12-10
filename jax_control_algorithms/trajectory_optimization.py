@@ -690,7 +690,6 @@ def optimize_trajectory(
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
 
 
-
 class Solver:
     def __init__(self, problem_def_fn, use_continuation=False):
         self.problem_def_fn = problem_def_fn
@@ -713,9 +712,7 @@ class Solver:
                 'running_cost' : running_cost,
                 'terminal_state_eq_constraints': terminal_state_eq_constraints,
                 'inequ_constraints' : inequ_constraints,
-
                 'make_guess' : make_guess,
-
                 'theta' : theta,
                 'x0' : x0,
             } 
