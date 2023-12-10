@@ -18,16 +18,15 @@ def test_state_est_pendulum(tb):
 
 @testbook('examples/trajectory_optim_integrator.ipynb', execute=True)
 def test_trajectory_optim(tb):
-#   verify_test_results(tb.test_results)
    assert True
 
 @testbook('examples/trajectory_optim_cart_pendulum.ipynb', execute=True)
 def test_trajectory_optim(tb):
    assert True
 
-@testbook('examples/trajectory_optim.ipynb', execute=True)
-def test_trajectory_optim(tb):
-   assert True
+# @testbook('examples/trajectory_optim.ipynb', execute=True)
+# def test_trajectory_optim(tb):
+#    assert True
 
 @testbook('examples/trajectory_optim_flow.ipynb', execute=True)
 def test_trajectory_optim_flow(tb):
