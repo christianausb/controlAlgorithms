@@ -173,7 +173,32 @@ def objective_penality_method( variables, parameters, static_parameters ):
 def feasibility_metric_penality_method(variables, parameters, static_parameters ):
     return __feasibility_metric_penality_method(variables, parameters, static_parameters )
 
+def _check_monotonic_convergence(i, trace):
+    """
+        Check the monotonic convergence of the error for the equality constraints 
+    """
+    trace_data = get_trace_data(trace)
 
+    # As being in the 2nd iteration, compare to prev. metric and see if it got smaller
+    is_metric_check_active = i > 2
+
+    def true_fn(par):
+        (i, trace, ) = par
+
+        delta_max_eq_error = trace[0][i] - trace[0][i-1]
+        is_abort  = delta_max_eq_error >= 0
+
+        return is_abort
+
+
+    def false_fn(par):
+        (i, trace, ) = par
+        return False
+
+    is_not_monotonic = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace_data, ) )
+
+    return is_not_monotonic
+        
 
 def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool):
     
@@ -200,32 +225,19 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     
     # trace
     trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, max_ineq_error, n_iter_inner ) )
-    trace_data = get_trace_data(trace_next)
-
     verification_state_next = ( trace_next, is_converged, )
 
-    # As being in the 2nd iteration, compare to prev. metric and see if it got smaller
-    is_metric_check_active = i > 2
+    # check for monotonic convergence of the equality constraints
+    is_not_monotonic = jnp.logical_and(
+        _check_monotonic_convergence(i, trace_next),
+        jnp.logical_not(is_converged),
+    )
 
-    def true_fn(par):
-        (i, trace, ) = par
-
-        delta_max_eq_error = trace[0][i] - trace[0][i-1]
-        is_abort  = delta_max_eq_error >= 0
-
-        return is_abort
-
-
-    def false_fn(par):
-        (i, trace, ) = par
-        return False
-
-    is_abort_because_of_metric = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace_data, ) )
     i_best = None    
 
     is_abort = jnp.logical_or(
         is_abort_because_of_nonfinite,
-        is_abort_because_of_metric
+        is_not_monotonic
     )
 
     if verbose:
@@ -239,10 +251,10 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         
         if False:  # additional info (for debugging purposes)
             jax.debug.print(
-                "   is_abort_because_of_nonfinite={is_abort_because_of_nonfinite} is_abort_because_of_metric={is_abort_because_of_metric}) " + 
+                "   is_abort_because_of_nonfinite={is_abort_because_of_nonfinite} is_not_monotonic={is_not_monotonic}) " + 
                 "is_eq_converged={is_eq_converged}, is_neq_converged={is_neq_converged}",
                 is_abort_because_of_nonfinite=is_abort_because_of_nonfinite,
-                is_abort_because_of_metric=is_abort_because_of_metric,
+                is_not_monotonic=is_not_monotonic,
                 is_eq_converged=is_eq_converged,
                 is_neq_converged=is_neq_converged,
             )
