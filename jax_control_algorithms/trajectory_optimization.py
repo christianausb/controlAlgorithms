@@ -111,19 +111,26 @@ def vectorize_running_cost(f_rk):
     return jax.vmap( f_rk, in_axes=(0, 0, 0, None) )
   
 
-def cost_fn(f, running_cost, X_opt_var, U_opt_var, K, theta):
- 
-    # cost
-    J_trajectory = vectorize_running_cost(running_cost)(X_opt_var, U_opt_var, K, theta)
+def cost_fn(f, cost, running_cost, X, U, K, theta):
+    """
+        evaluate the cost of the given configuration X, U
+    """
 
-    J = jnp.mean(J_trajectory)
-    return J
+    assert callable(cost) or callable(running_cost), 'no cost function was given'
+ 
+    cost = cost(X, U, K, theta) if callable(cost) else 0
+
+    running_cost = jnp.mean( # TODO: remove mean()
+        vectorize_running_cost(running_cost)(X, U, K, theta) if callable(running_cost) else 0
+    )
+
+    return cost + running_cost
 
 def __objective_penality_method( variables, parameters, static_parameters ):
     
-    K, theta, x0, opt_t, opt_c_eq                      = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, running_cost = static_parameters
-    X, U                                                              = variables
+    K, theta, x0, opt_t, opt_c_eq                                           = parameters
+    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
+    X, U                                                                    = variables
     
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
@@ -141,7 +148,7 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     )
     
     # eval cost function of problem definition        
-    J_cost_function = cost_fn(f, running_cost, X, U, K, theta)
+    J_cost_function = cost_fn(f, cost, running_cost, X, U, K, theta)
     
     # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(
@@ -153,9 +160,9 @@ def __objective_penality_method( variables, parameters, static_parameters ):
 
 def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
     
-    K, theta, x0                                       = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, running_cost = static_parameters
-    X, U                                                              = variables
+    K, theta, x0                                                            = parameters
+    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
+    X, U                                                                    = variables
     
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
     c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, 0)
@@ -449,21 +456,22 @@ def get_default_solver_settings():
     
     return solver_settings
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5,   9, 10, 11, 12))
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6,   10, 11, 12, 13))
 def optimize_trajectory(
     # static
     f, 
     g,
     terminal_state_eq_constraints,
     inequ_constraints,
+    cost,
     running_cost,
-    initial_guess,   # 5
+    initial_guess,   # 6
     
     # dynamic
-    x0,              # 6
-    theta,           # 7
+    x0,              # 7
+    theta,           # 8
     
-    solver_settings, # 8
+    solver_settings, # 9
 
     # static
     enable_float64 = True,
@@ -491,8 +499,15 @@ def optimize_trajectory(
             terminal_state_eq_constraints:
                 function to evaluate the terminal constraints
 
+            cost:
+                function to evaluate the cost J = cost(X, U, T, theta)
+                Unlike running_cost, the entire vectors for the state X and actuation U trajectories
+                are passed.
+
             running_cost: 
                 function to evaluate the running costs J = running_cost(x, u, t, theta)
+                Unlike cost, associated samples of the state (x) and the actuation trajectory (u) 
+                are passed.
                 
             inequ_constraints: 
                 a function to evaluate the inequality constraints and prototype 
@@ -603,7 +618,7 @@ def optimize_trajectory(
 
     # pack parameters and variables
     parameters        = (K, theta, x0, )
-    static_parameters = (f, terminal_state_eq_constraints, inequ_constraints, running_cost)
+    static_parameters = (f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost)
     variables         = (X_guess, U_guess)
 
     # pass static parameters into objective function
@@ -762,7 +777,8 @@ class Solver:
             self.problem_definition['g'],
             self.problem_definition['terminal_state_eq_constraints'], # self.terminal_state_eq_constraints,
             self.problem_definition['inequ_constraints'], #self.inequ_constraints,
-            self.problem_definition['running_cost'], #self.running_cost,
+            self.problem_definition.get('cost'),
+            self.problem_definition.get('running_cost'), #self.running_cost,
             
             self.problem_definition['make_guess'], # use callable to generate guess # self.initial_guess,
 
@@ -770,16 +786,6 @@ class Solver:
             self.problem_definition['theta'], # self.theta,
 
             self.solver_settings,
-            
-            # max_iter_boundary_method = self.max_iter_boundary_method,
-            # max_iter_inner           = self.max_iter_inner,
-            
-            # c_eq_init = self.c_eq_init,
-            # opt_t_init    = self.opt_t_init,
-            # lam           = self.lam,
-            # eq_tol        = self.eq_tol,
-            # t_final       = self.t_final,
-            # tol_inner     = self.tol_inner,
 
             enable_float64           = self.enable_float64,
             max_float32_iterations   = self.max_float32_iterations,
