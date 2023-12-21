@@ -113,9 +113,13 @@ def my_to_int(x):
 #
 
 def init_trace_memory(max_trace_entries, dtypes = [jnp.float32, jnp.int32], init_values=[jnp.nan, -1] ):
-    
+        
     trace_data = [
-        v * jnp.ones(max_trace_entries, dtype=dtype)
+        jnp.repeat( 
+            jnp.array([v], dtype=dtype),
+            max_trace_entries, 
+            axis=0
+        )
         for dtype, v in zip(dtypes, init_values)
     ]
     
@@ -157,6 +161,10 @@ def get_trace_data(traces):
     return trace_data
     
 
+#
+# test tracing
+#
+
 # set-up
 traces = init_trace_memory(10, dtypes = [jnp.float32, jnp.int32], init_values=[-10, -1])
 trace_data = get_trace_data(traces)
@@ -181,3 +189,21 @@ for i in range(9):
 traces, is_ok = append_to_trace(traces, (1.1, 2))
 assert not is_ok
 
+#
+# Test tracing of arrays
+#
+
+# set-up
+test_array = jnp.arange(0,5)
+traces = init_trace_memory(10, dtypes = [jnp.float32, ], init_values=[ test_array, ])
+trace_data = get_trace_data(traces)
+
+assert all([
+    jnp.all((trace_data[0][i] - test_array) == 0).item()
+    for i in range(10)
+])
+
+traces, is_ok = append_to_trace(traces, ( jnp.arange(10,15), ))
+trace_data = get_trace_data(traces)
+                                
+assert jnp.all( trace_data[0][0] == jnp.arange(10,15) )
