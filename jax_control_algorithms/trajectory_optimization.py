@@ -111,19 +111,26 @@ def vectorize_running_cost(f_rk):
     return jax.vmap( f_rk, in_axes=(0, 0, 0, None) )
   
 
-def cost_fn(f, running_cost, X_opt_var, U_opt_var, K, theta):
- 
-    # cost
-    J_trajectory = vectorize_running_cost(running_cost)(X_opt_var, U_opt_var, K, theta)
+def cost_fn(f, cost, running_cost, X, U, K, theta):
+    """
+        evaluate the cost of the given configuration X, U
+    """
 
-    J = jnp.mean(J_trajectory)
-    return J
+    assert callable(cost) or callable(running_cost), 'no cost function was given'
+ 
+    cost = cost(X, U, K, theta) if callable(cost) else 0
+
+    running_cost = jnp.mean( # TODO: remove mean()
+        vectorize_running_cost(running_cost)(X, U, K, theta) if callable(running_cost) else 0
+    )
+
+    return cost + running_cost
 
 def __objective_penality_method( variables, parameters, static_parameters ):
     
-    K, theta, x0, opt_t, opt_c_eq                      = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, running_cost = static_parameters
-    X, U                                                              = variables
+    K, theta, x0, opt_t, opt_c_eq                                           = parameters
+    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
+    X, U                                                                    = variables
     
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
@@ -141,7 +148,7 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     )
     
     # eval cost function of problem definition        
-    J_cost_function = cost_fn(f, running_cost, X, U, K, theta)
+    J_cost_function = cost_fn(f, cost, running_cost, X, U, K, theta)
     
     # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(
@@ -153,9 +160,9 @@ def __objective_penality_method( variables, parameters, static_parameters ):
 
 def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
     
-    K, theta, x0                                       = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, running_cost = static_parameters
-    X, U                                                              = variables
+    K, theta, x0                                                            = parameters
+    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
+    X, U                                                                    = variables
     
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
     c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, 0)
@@ -173,7 +180,32 @@ def objective_penality_method( variables, parameters, static_parameters ):
 def feasibility_metric_penality_method(variables, parameters, static_parameters ):
     return __feasibility_metric_penality_method(variables, parameters, static_parameters )
 
+def _check_monotonic_convergence(i, trace):
+    """
+        Check the monotonic convergence of the error for the equality constraints 
+    """
+    trace_data = get_trace_data(trace)
 
+    # As being in the 2nd iteration, compare to prev. metric and see if it got smaller
+    is_metric_check_active = i > 2
+
+    def true_fn(par):
+        (i, trace, ) = par
+
+        delta_max_eq_error = trace[0][i] - trace[0][i-1]
+        is_abort  = delta_max_eq_error >= 0
+
+        return is_abort
+
+
+    def false_fn(par):
+        (i, trace, ) = par
+        return False
+
+    is_not_monotonic = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace_data, ) )
+
+    return is_not_monotonic
+        
 
 def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool):
     
@@ -199,33 +231,21 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     )
     
     # trace
-    trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, max_ineq_error, n_iter_inner ) )
-    trace_data = get_trace_data(trace_next)
-
+    X, U = variables
+    trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, max_ineq_error, n_iter_inner, X, U ) )
     verification_state_next = ( trace_next, is_converged, )
 
-    # As being in the 2nd iteration, compare to prev. metric and see if it got smaller
-    is_metric_check_active = i > 2
+    # check for monotonic convergence of the equality constraints
+    is_not_monotonic = jnp.logical_and(
+        _check_monotonic_convergence(i, trace_next),
+        jnp.logical_not(is_converged),
+    )
 
-    def true_fn(par):
-        (i, trace, ) = par
-
-        delta_max_eq_error = trace[0][i] - trace[0][i-1]
-        is_abort  = delta_max_eq_error >= 0
-
-        return is_abort
-
-
-    def false_fn(par):
-        (i, trace, ) = par
-        return False
-
-    is_abort_because_of_metric = lax.cond(is_metric_check_active, true_fn, false_fn, ( i, trace_data, ) )
     i_best = None    
 
     is_abort = jnp.logical_or(
         is_abort_because_of_nonfinite,
-        is_abort_because_of_metric
+        is_not_monotonic
     )
 
     if verbose:
@@ -239,10 +259,10 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
         
         if False:  # additional info (for debugging purposes)
             jax.debug.print(
-                "   is_abort_because_of_nonfinite={is_abort_because_of_nonfinite} is_abort_because_of_metric={is_abort_because_of_metric}) " + 
+                "   is_abort_because_of_nonfinite={is_abort_because_of_nonfinite} is_not_monotonic={is_not_monotonic}) " + 
                 "is_eq_converged={is_eq_converged}, is_neq_converged={is_neq_converged}",
                 is_abort_because_of_nonfinite=is_abort_because_of_nonfinite,
-                is_abort_because_of_metric=is_abort_because_of_metric,
+                is_not_monotonic=is_not_monotonic,
                 is_eq_converged=is_eq_converged,
                 is_neq_converged=is_neq_converged,
             )
@@ -437,24 +457,26 @@ def get_default_solver_settings():
     
     return solver_settings
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5,   9, 10, 11, 12))
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7,    11, 12, 13, 14))
 def optimize_trajectory(
     # static
     f, 
     g,
     terminal_state_eq_constraints,
     inequ_constraints,
+    cost,
     running_cost,
-    initial_guess,   # 5
+    initial_guess,   # 6
+    transform_parameters, # 7
     
     # dynamic
-    x0,              # 6
-    theta,           # 7
+    x0,              # 8
+    theta,           # 9
     
-    solver_settings, # 8
+    solver_settings, # 10
 
     # static
-    enable_float64 = True,
+    enable_float64 = True, # 11
     max_float32_iterations = 0,
     max_trace_entries = 100,
     verbose = True,
@@ -479,15 +501,29 @@ def optimize_trajectory(
             terminal_state_eq_constraints:
                 function to evaluate the terminal constraints
 
+            cost:
+                function to evaluate the cost J = cost(X, U, T, theta)
+                Unlike running_cost, the entire vectors for the state X and actuation U trajectories
+                are passed.
+
             running_cost: 
                 function to evaluate the running costs J = running_cost(x, u, t, theta)
+                Unlike cost, associated samples of the state (x) and the actuation trajectory (u) 
+                are passed.
                 
             inequ_constraints: 
                 a function to evaluate the inequality constraints and prototype 
                 c_neq = inequ_constraints(x, u, k, theta)
                 
                 A fulfilled constraint is indicated by a the value c_neq[] >= 0.
-                
+
+            transform_parameters:
+                a function (or None) that is called to transform the problem parameters before
+                running the optimization, i.e.,
+
+                theta_transformed = transform_parameters(theta)
+
+                The transformed parameters are then used for finding the solution.            
                 
             -- dynamic parameters (jax values) --
                 
@@ -567,6 +603,9 @@ def optimize_trajectory(
         print('compiling optimizer')
 
     #
+    if callable(transform_parameters):
+        theta = transform_parameters(theta)
+
     if callable(initial_guess):
         initial_guess = initial_guess(x0, theta)
 
@@ -591,7 +630,7 @@ def optimize_trajectory(
 
     # pack parameters and variables
     parameters        = (K, theta, x0, )
-    static_parameters = (f, terminal_state_eq_constraints, inequ_constraints, running_cost)
+    static_parameters = (f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost)
     variables         = (X_guess, U_guess)
 
     # pass static parameters into objective function
@@ -605,10 +644,14 @@ def optimize_trajectory(
     )
     
     # trace vars
-    trace_init = init_trace_memory(max_trace_entries, (jnp.float32, jnp.float32, jnp.int32), ( jnp.nan, jnp.nan, -1 ) )
+    trace_init = init_trace_memory(
+        max_trace_entries, 
+        (jnp.float32, jnp.float32, jnp.int32, jnp.float32, jnp.float32),
+        ( jnp.nan, jnp.nan, -1, jnp.nan*jnp.zeros_like(X_guess), jnp.nan*jnp.zeros_like(U_guess) )
+    )
 
     #
-    # iterate
+    # iterate: TODO: put into function 
     #
 
     opt_t    = solver_settings['opt_t_init']
@@ -748,26 +791,17 @@ class Solver:
         solver_return = optimize_trajectory(
             self.problem_definition['f'], 
             self.problem_definition['g'],
-            self.problem_definition['terminal_state_eq_constraints'], # self.terminal_state_eq_constraints,
-            self.problem_definition['inequ_constraints'], #self.inequ_constraints,
-            self.problem_definition['running_cost'], #self.running_cost,
-            
-            self.problem_definition['make_guess'], # use callable to generate guess # self.initial_guess,
+            self.problem_definition['terminal_state_eq_constraints'],
+            self.problem_definition['inequ_constraints'],
+            self.problem_definition.get('cost'),
+            self.problem_definition.get('running_cost'),
+            self.problem_definition['make_guess'],
+            self.problem_definition.get('transform_parameters'), 
 
-            self.problem_definition['x0'], # self.x0,
-            self.problem_definition['theta'], # self.theta,
+            self.problem_definition['x0'],
+            self.problem_definition['theta'],
 
             self.solver_settings,
-            
-            # max_iter_boundary_method = self.max_iter_boundary_method,
-            # max_iter_inner           = self.max_iter_inner,
-            
-            # c_eq_init = self.c_eq_init,
-            # opt_t_init    = self.opt_t_init,
-            # lam           = self.lam,
-            # eq_tol        = self.eq_tol,
-            # t_final       = self.t_final,
-            # tol_inner     = self.tol_inner,
 
             enable_float64           = self.enable_float64,
             max_float32_iterations   = self.max_float32_iterations,
@@ -803,12 +837,60 @@ def unpack_res(res):
     c_ineq = res['c_ineq']
     trace = res['trace']
     n_iter = res['n_iter']
+
+    traces = {
+        'X_trace' : trace[3],
+        'U_trace' : trace[4],
+    }
     
-    return is_converged, c_eq, c_ineq, trace, n_iter
+    return is_converged, c_eq, c_ineq, traces, n_iter
     
     
     
+
+def plot_array_of_traces(X, n_iter, title_string='', figsize=(8, 5)):
+
+    from matplotlib import cm
+    import matplotlib.pyplot as plt 
+    import numpy as np
+
+    def _get_color(i, i_max, colormap = cm.rainbow):
+        c = float(i) / float(i_max)        
+        cindex = int( i_max * c )
+
+        norm = plt.Normalize(vmin=0, vmax=1)
+        sample_values = np.linspace(0, 1, i_max)
+        rgba_samples = colormap(norm(sample_values))
+        color = rgba_samples[cindex]
+        
+        return color
+
+
+    n_lines = X.shape[2]
+
+    fig, axes = plt.subplots(n_lines, 1, sharex=True, figsize=figsize, squeeze=False)
+
+    for i_ax in range(n_lines):
+        
+        ax = axes[i_ax][0]
+
+        lines = [
+            ax.plot( X[i, :, i_ax], color=_get_color( i, n_iter ) )[0]
+            for i in range(n_iter)
+        ]
+
+        lines[0].set_label('first iteration i=0')
+        lines[-1].set_label('last iteration i=' + str(n_iter-1))
+        ax.legend()
+        ax.set_title(title_string + str(i_ax))
+        
+    return fig
     
     
+def plot_iterations(res, figsize=(8, 5)):
+    is_converged, c_eq, c_ineq, traces, n_iter = unpack_res(res)
+
+    fig1 = plot_array_of_traces(traces['X_trace'], res.get('n_iter'), 'state ', figsize)
+    fig2 = plot_array_of_traces(traces['U_trace'], res.get('n_iter'), 'control variable ', figsize)
     
-    
+    return fig1, fig2
