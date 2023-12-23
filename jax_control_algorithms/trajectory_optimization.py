@@ -457,7 +457,7 @@ def get_default_solver_settings():
     
     return solver_settings
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6,   10, 11, 12, 13))
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7,    11, 12, 13, 14))
 def optimize_trajectory(
     # static
     f, 
@@ -467,15 +467,16 @@ def optimize_trajectory(
     cost,
     running_cost,
     initial_guess,   # 6
+    transform_parameters, # 7
     
     # dynamic
-    x0,              # 7
-    theta,           # 8
+    x0,              # 8
+    theta,           # 9
     
-    solver_settings, # 9
+    solver_settings, # 10
 
     # static
-    enable_float64 = True,
+    enable_float64 = True, # 11
     max_float32_iterations = 0,
     max_trace_entries = 100,
     verbose = True,
@@ -515,7 +516,14 @@ def optimize_trajectory(
                 c_neq = inequ_constraints(x, u, k, theta)
                 
                 A fulfilled constraint is indicated by a the value c_neq[] >= 0.
-                
+
+            transform_parameters:
+                a function (or None) that is called to transform the problem parameters before
+                running the optimization, i.e.,
+
+                theta_transformed = transform_parameters(theta)
+
+                The transformed parameters are then used for finding the solution.            
                 
             -- dynamic parameters (jax values) --
                 
@@ -595,6 +603,9 @@ def optimize_trajectory(
         print('compiling optimizer')
 
     #
+    if callable(transform_parameters):
+        theta = transform_parameters(theta)
+
     if callable(initial_guess):
         initial_guess = initial_guess(x0, theta)
 
@@ -640,7 +651,7 @@ def optimize_trajectory(
     )
 
     #
-    # iterate
+    # iterate: TODO: put into function 
     #
 
     opt_t    = solver_settings['opt_t_init']
@@ -784,8 +795,8 @@ class Solver:
             self.problem_definition['inequ_constraints'],
             self.problem_definition.get('cost'),
             self.problem_definition.get('running_cost'),
-            
             self.problem_definition['make_guess'],
+            self.problem_definition.get('transform_parameters'), 
 
             self.problem_definition['x0'],
             self.problem_definition['theta'],
