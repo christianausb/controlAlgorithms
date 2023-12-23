@@ -231,7 +231,8 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     )
     
     # trace
-    trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, max_ineq_error, n_iter_inner ) )
+    X, U = variables
+    trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, max_ineq_error, n_iter_inner, X, U ) )
     verification_state_next = ( trace_next, is_converged, )
 
     # check for monotonic convergence of the equality constraints
@@ -632,7 +633,11 @@ def optimize_trajectory(
     )
     
     # trace vars
-    trace_init = init_trace_memory(max_trace_entries, (jnp.float32, jnp.float32, jnp.int32), ( jnp.nan, jnp.nan, -1 ) )
+    trace_init = init_trace_memory(
+        max_trace_entries, 
+        (jnp.float32, jnp.float32, jnp.int32, jnp.float32, jnp.float32),
+        ( jnp.nan, jnp.nan, -1, jnp.nan*jnp.zeros_like(X_guess), jnp.nan*jnp.zeros_like(U_guess) )
+    )
 
     #
     # iterate
@@ -775,15 +780,15 @@ class Solver:
         solver_return = optimize_trajectory(
             self.problem_definition['f'], 
             self.problem_definition['g'],
-            self.problem_definition['terminal_state_eq_constraints'], # self.terminal_state_eq_constraints,
-            self.problem_definition['inequ_constraints'], #self.inequ_constraints,
+            self.problem_definition['terminal_state_eq_constraints'],
+            self.problem_definition['inequ_constraints'],
             self.problem_definition.get('cost'),
-            self.problem_definition.get('running_cost'), #self.running_cost,
+            self.problem_definition.get('running_cost'),
             
-            self.problem_definition['make_guess'], # use callable to generate guess # self.initial_guess,
+            self.problem_definition['make_guess'],
 
-            self.problem_definition['x0'], # self.x0,
-            self.problem_definition['theta'], # self.theta,
+            self.problem_definition['x0'],
+            self.problem_definition['theta'],
 
             self.solver_settings,
 
@@ -821,12 +826,60 @@ def unpack_res(res):
     c_ineq = res['c_ineq']
     trace = res['trace']
     n_iter = res['n_iter']
+
+    traces = {
+        'X_trace' : trace[3],
+        'U_trace' : trace[4],
+    }
     
-    return is_converged, c_eq, c_ineq, trace, n_iter
+    return is_converged, c_eq, c_ineq, traces, n_iter
     
     
     
+
+def plot_array_of_traces(X, n_iter, title_string='', figsize=(8, 5)):
+
+    from matplotlib import cm
+    import matplotlib.pyplot as plt 
+    import numpy as np
+
+    def _get_color(i, i_max, colormap = cm.rainbow):
+        c = float(i) / float(i_max)        
+        cindex = int( i_max * c )
+
+        norm = plt.Normalize(vmin=0, vmax=1)
+        sample_values = np.linspace(0, 1, i_max)
+        rgba_samples = colormap(norm(sample_values))
+        color = rgba_samples[cindex]
+        
+        return color
+
+
+    n_lines = X.shape[2]
+
+    fig, axes = plt.subplots(n_lines, 1, sharex=True, figsize=figsize, squeeze=False)
+
+    for i_ax in range(n_lines):
+        
+        ax = axes[i_ax][0]
+
+        lines = [
+            ax.plot( X[i, :, i_ax], color=_get_color( i, n_iter ) )[0]
+            for i in range(n_iter)
+        ]
+
+        lines[0].set_label('first iteration i=0')
+        lines[-1].set_label('last iteration i=' + str(n_iter-1))
+        ax.legend()
+        ax.set_title(title_string + str(i_ax))
+        
+    return fig
     
     
+def plot_iterations(res, figsize=(8, 5)):
+    is_converged, c_eq, c_ineq, traces, n_iter = unpack_res(res)
+
+    fig1 = plot_array_of_traces(traces['X_trace'], res.get('n_iter'), 'state ', figsize)
+    fig2 = plot_array_of_traces(traces['U_trace'], res.get('n_iter'), 'control variable ', figsize)
     
-    
+    return fig1, fig2
