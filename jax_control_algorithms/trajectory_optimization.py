@@ -273,12 +273,6 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
 def _optimize_trajectory( 
         i, variables, parameters, opt_t, opt_c_eq, verification_state_init, 
         
-        # lam,
-        # tol_inner, 
-        # t_final, 
-        # max_iter_boundary_method,
-        # max_iter_inner,
-        
         solver_settings,
 
         objective_fn, verification_fn,
@@ -417,6 +411,64 @@ def _optimize_trajectory(
 
     return loop_par['variables'], loop_par['opt_t'], loop_par['opt_c_eq'], n_iter, loop_par['verification_state']
 
+
+def _solve(
+    variables, parameters, solver_settings, 
+    trace_init, 
+    objective_, verification_fn_, 
+    max_float32_iterations, enable_float64, 
+    verbose
+):
+
+    opt_t    = solver_settings['opt_t_init']
+    opt_c_eq = solver_settings['c_eq_init']
+    i = 0
+    verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
+
+    # iterations that are performed using float32 datatypes
+    if max_float32_iterations > 0:
+        variables, opt_t, opt_c_eq, n_iter_f32, verification_state = _optimize_trajectory( 
+            i, 
+            variables, parameters, 
+            jnp.array(opt_t, dtype=jnp.float32),
+            jnp.array(opt_c_eq, dtype=jnp.float32),
+            verification_state, 
+            solver_settings,
+            objective_, verification_fn_,
+            verbose, 
+            False, # show_errors
+            target_dtype=jnp.float32
+        )
+
+        i = i + n_iter_f32
+
+        if verbose:
+            jax.debug.print("👉 switching to higher numerical precision after {n_iter_f32} iterations: float32 --> float64", n_iter_f32=n_iter_f32)
+
+    # iterations that are performed using float64 datatypes
+    if enable_float64:
+        variables, opt_t, opt_c_eq, n_iter_f64, verification_state = _optimize_trajectory( 
+            i, 
+            variables, parameters, 
+            jnp.array(opt_t, dtype=jnp.float64),
+            jnp.array(opt_c_eq, dtype=jnp.float64),
+            verification_state, 
+            solver_settings,            
+            objective_, verification_fn_,
+            verbose, 
+            True if verbose else False, # show_errors
+            target_dtype=jnp.float64
+        )
+        i = i + n_iter_f64
+
+
+    n_iter = i
+    variables_star = variables
+    trace = get_trace_data( verification_state[0] )
+
+    is_converged = verification_state[1]
+
+    return variables_star, is_converged, n_iter, trace
 
 
 def _get_sizes(X_guess, U_guess, x0):
@@ -650,61 +702,14 @@ def optimize_trajectory(
         ( jnp.nan, jnp.nan, -1, jnp.nan*jnp.zeros_like(X_guess), jnp.nan*jnp.zeros_like(U_guess) )
     )
 
-    #
-    # iterate: TODO: put into function 
-    #
-
-    opt_t    = solver_settings['opt_t_init']
-    opt_c_eq = solver_settings['c_eq_init']
-    i = 0
-    verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
-
-    # float32
-    if max_float32_iterations > 0:
-        variables, opt_t, opt_c_eq, n_iter_f32, verification_state = _optimize_trajectory( 
-            i, 
-            variables, parameters, 
-            jnp.array(opt_t, dtype=jnp.float32),
-            jnp.array(opt_c_eq, dtype=jnp.float32),
-            verification_state, 
-            solver_settings,
-            objective_, verification_fn_,
-            verbose, 
-            False, # show_errors
-            target_dtype=jnp.float32
-        )
-
-        i = i + n_iter_f32
-
-        if verbose:
-            jax.debug.print("👉 switching to higher numerical precision after {n_iter_f32} iterations: float32 --> float64", n_iter_f32=n_iter_f32)
-
-    # float64
-    if enable_float64:
-        variables, opt_t, opt_c_eq, n_iter_f64, verification_state = _optimize_trajectory( 
-            i, 
-            variables, parameters, 
-            jnp.array(opt_t, dtype=jnp.float64),
-            jnp.array(opt_c_eq, dtype=jnp.float64),
-            verification_state, 
-            solver_settings,            
-            objective_, verification_fn_,
-            verbose, 
-            True if verbose else False, # show_errors
-            target_dtype=jnp.float64
-        )
-        i = i + n_iter_f64
-
-
-    n_iter = i
-    variables_star = variables
-    trace = get_trace_data( verification_state[0] )
-
-    is_converged = verification_state[1]
-
-    #
-    # end iterate
-    #
+    # run solver
+    variables_star, is_converged, n_iter, trace = _solve(
+        variables, parameters, solver_settings, 
+        trace_init, 
+        objective_, verification_fn_, 
+        max_float32_iterations, enable_float64, 
+        verbose
+    )
 
     # unpack results for optimized variables
     X_opt, U_opt = variables_star
@@ -731,6 +736,10 @@ def optimize_trajectory(
     }
 
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
+
+
+
+
 
 
 class Solver:
