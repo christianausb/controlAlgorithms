@@ -765,7 +765,7 @@ class Solver:
                 'terminal_constraints': terminal_constraints,
                 'inequality_constraints' : inequality_constraints,
                 'initial_guess' : initial_guess,
-                'theta' : theta,
+                'parameters' : theta,
                 'x0' : x0,
             } 
 
@@ -777,7 +777,7 @@ class Solver:
         self.solver_settings = get_default_solver_settings()
         
         initial_guess = self.problem_definition['initial_guess'](
-            self.problem_definition['x0'], self.problem_definition['theta']
+            self.problem_definition['x0'], self.problem_definition['parameters']
         )
 
         # derive the number of sampling instants from the initial guess
@@ -808,7 +808,7 @@ class Solver:
             self.problem_definition.get('transform_parameters'), 
 
             self.problem_definition['x0'],
-            self.problem_definition['theta'],
+            self.problem_definition['parameters'],
 
             self.solver_settings,
 
@@ -834,7 +834,7 @@ class Solver:
     
 @property
 def theta(self, theta):
-    self.problem_definition['theta'] = theta
+    self.problem_definition['parameters'] = theta
 
 
 def unpack_res(res):
