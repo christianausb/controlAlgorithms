@@ -546,10 +546,11 @@ def optimize_trajectory(
                 - u: (n_inputs, )     the system input(s)
                 - k: scalar           the sampling index
                 - theta: (JAX-pytree) the parameters theta as passed to optimize_trajectory
+                - theta: (JAX-pytree) the parameters theta as passed to optimize_trajectory
             g: 
-                the optional output function g(x, u, k, theta)
-                - the parameters of the callback have the same meaning like with the callback f
-            
+                the optional output function g(x, u, k, parameters)
+                - the parameters of the callback have the same meaning as the ones of f
+
             terminal_constraints:
                 function to evaluate the terminal constraints
 
@@ -594,10 +595,9 @@ def optimize_trajectory(
                 or a callable function the returns such a dictionary. 
             
             theta: (JAX-pytree)
-                parameters to the system model that are forwarded to f, g, cost_fn
+                parameters to the system model that are forwarded to f, g, running_cost
                         
-                        
-            -- static parameters (no jax datatypes) --
+            -- static parameters (no jax-arrays or pytrees) --
             
             max_iter_boundary_method: int
                 The maximum number of iterations to apply the boundary method.
