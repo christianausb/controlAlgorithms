@@ -271,7 +271,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     return verification_state_next, is_converged, is_eq_converged, is_abort, is_X_finite, i_best
 
 def _optimize_trajectory( 
-        i, variables, parameters, opt_t, opt_c_eq, verification_state_init, 
+        i, variables, parameters_of_dynamic_model, opt_t, opt_c_eq, verification_state_init, 
         
         solver_settings,
 
@@ -280,9 +280,9 @@ def _optimize_trajectory(
     ):
 
     # convert dtypes
-    ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
+    ( variables, parameters_of_dynamic_model, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
         ( 
-            variables, parameters, 
+            variables, parameters_of_dynamic_model, 
             opt_t, opt_c_eq, 
             verification_state_init, 
             solver_settings['lam'], solver_settings['tol_inner'], 
@@ -300,13 +300,13 @@ def _optimize_trajectory(
     def loop_body(loop_par):
             
         #
-        parameters_ = loop_par['parameters'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
+        parameters_passed_to_inner_solver = loop_par['parameters_of_dynamic_model'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
 
-        # run optimization
+        # run inner solver
         gd = jaxopt.BFGS(
             fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=solver_settings['max_iter_inner']
             )
-        res = gd.run(loop_par['variables'], parameters=parameters_)
+        res = gd.run(loop_par['variables'], parameters=parameters_passed_to_inner_solver)
         _variables_next = res.params
 
         # run callback
@@ -314,7 +314,7 @@ def _optimize_trajectory(
             loop_par['verification_state'], 
             loop_par['i'], 
             res, _variables_next, 
-            loop_par['parameters'], 
+            loop_par['parameters_of_dynamic_model'], 
             loop_par['opt_t']
         )
 
@@ -355,7 +355,7 @@ def _optimize_trajectory(
             'is_abort'    : is_abort,
             'is_X_finite' : is_X_finite,
             'variables'   : variables_next, 
-            'parameters'  : loop_par['parameters'], 
+            'parameters_of_dynamic_model'  : loop_par['parameters_of_dynamic_model'], 
             'opt_t'       : opt_t_next, 
             'opt_c_eq'    : opt_c_eq_next, 
             'i'           : loop_par['i'] + 1,
@@ -396,7 +396,7 @@ def _optimize_trajectory(
         'is_abort'    : jnp.array(False, dtype=jnp.bool_),
         'is_X_finite' : jnp.array(True,  dtype=jnp.bool_),
         'variables'     : variables, 
-        'parameters' : parameters, 
+        'parameters_of_dynamic_model' : parameters_of_dynamic_model, 
         'opt_t' : opt_t, 
         'opt_c_eq' : opt_c_eq, 
         'i' : i, 
@@ -413,7 +413,7 @@ def _optimize_trajectory(
 
 
 def _solve(
-    variables, parameters, solver_settings, 
+    variables, parameters_of_dynamic_model, solver_settings, 
     trace_init, 
     objective_, verification_fn_, 
     max_float32_iterations, enable_float64, 
@@ -429,7 +429,7 @@ def _solve(
     if max_float32_iterations > 0:
         variables, opt_t, opt_c_eq, n_iter_f32, verification_state = _optimize_trajectory( 
             i, 
-            variables, parameters, 
+            variables, parameters_of_dynamic_model, 
             jnp.array(opt_t, dtype=jnp.float32),
             jnp.array(opt_c_eq, dtype=jnp.float32),
             verification_state, 
@@ -449,7 +449,7 @@ def _solve(
     if enable_float64:
         variables, opt_t, opt_c_eq, n_iter_f64, verification_state = _optimize_trajectory( 
             i, 
-            variables, parameters, 
+            variables, parameters_of_dynamic_model, 
             jnp.array(opt_t, dtype=jnp.float64),
             jnp.array(opt_c_eq, dtype=jnp.float64),
             verification_state, 
@@ -681,7 +681,7 @@ def optimize_trajectory(
     K = jnp.arange(n_steps)
 
     # pack parameters and variables
-    parameters        = (K, theta, x0, )
+    parameters_of_dynamic_model        = (K, theta, x0, )
     static_parameters = (f, terminal_constraints, inequality_constraints, cost, running_cost)
     variables         = (X_guess, U_guess)
 
@@ -704,7 +704,7 @@ def optimize_trajectory(
 
     # run solver
     variables_star, is_converged, n_iter, trace = _solve(
-        variables, parameters, solver_settings, 
+        variables, parameters_of_dynamic_model, solver_settings, 
         trace_init, 
         objective_, verification_fn_, 
         max_float32_iterations, enable_float64, 
