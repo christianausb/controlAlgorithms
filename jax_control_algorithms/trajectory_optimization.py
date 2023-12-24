@@ -68,14 +68,14 @@ def boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
 # routine for state estimation and parameter identification
 #
 
-def eq_constraint(f, terminal_constraints, X_opt_var, U_opt_var, K, x0, theta, power):
+def eq_constraint(f, terminal_constraints, X_opt_var, U_opt_var, K, x0, parameters, power):
     """
     algebraic constraints for the system dynamics
     """
 
     X = jnp.vstack(( x0 , X_opt_var ))
     
-    X_next = eval_X_next(f, X[:-1], U_opt_var, K, theta)
+    X_next = eval_X_next(f, X[:-1], U_opt_var, K, parameters)
 
     # compute c_eq( i ) = x( i+1 ) - x_next( i ) for all i
     c_eq_running =  jnp.exp2(power) * X[1:] -  jnp.exp2(power) * X_next
@@ -89,11 +89,11 @@ def eq_constraint(f, terminal_constraints, X_opt_var, U_opt_var, K, x0, theta, p
         if number_parameters_to_terminal_fn == 2:
             # the constraint function implements the power parameter
             
-            c_eq_terminal = jnp.exp2(power) * terminal_constraints(x_terminal, theta)
+            c_eq_terminal = jnp.exp2(power) * terminal_constraints(x_terminal, parameters)
             
         elif number_parameters_to_terminal_fn == 3:
             
-            c_eq_terminal = terminal_constraints(x_terminal, theta, power)
+            c_eq_terminal = terminal_constraints(x_terminal, parameters, power)
         
         
         # total
@@ -106,31 +106,31 @@ def eq_constraint(f, terminal_constraints, X_opt_var, U_opt_var, K, x0, theta, p
     
 def vectorize_running_cost(f_rk):
     """ 
-        vectorize the running cost function running_cost(x, u, t, theta)
+        vectorize the running cost function running_cost(x, u, t, parameters)
     """
     return jax.vmap( f_rk, in_axes=(0, 0, 0, None) )
   
 
-def cost_fn(f, cost, running_cost, X, U, K, theta):
+def evaluate_cost(f, cost, running_cost, X, U, K, parameters):
     """
         evaluate the cost of the given configuration X, U
     """
 
     assert callable(cost) or callable(running_cost), 'no cost function was given'
  
-    cost = cost(X, U, K, theta) if callable(cost) else 0
+    cost = cost(X, U, K, parameters) if callable(cost) else 0
 
     running_cost = jnp.mean( # TODO: remove mean()
-        vectorize_running_cost(running_cost)(X, U, K, theta) if callable(running_cost) else 0
+        vectorize_running_cost(running_cost)(X, U, K, parameters) if callable(running_cost) else 0
     )
 
     return cost + running_cost
 
-def __objective_penality_method( variables, parameters, static_parameters ):
+def __objective_penality_method( variables, parameters_passed_to_solver, static_parameters ):
     
-    K, theta, x0, opt_t, opt_c_eq                                           = parameters
+    K, parameters, x0, opt_t, opt_c_eq                                       = parameters_passed_to_solver
     f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
-    X, U                                                                    = variables
+    X, U                                                                = variables
     
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
@@ -139,8 +139,8 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     power = 0
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_constraints, X, U, K, x0, theta, power).reshape(-1)
-    c_ineq = inequality_constraints(X, U, K, theta).reshape(-1)        
+    c_eq = eq_constraint(f, terminal_constraints, X, U, K, x0, parameters, power).reshape(-1)
+    c_ineq = inequality_constraints(X, U, K, parameters).reshape(-1)        
 
     # equality constraints using penality method    
     J_equality_costs = opt_c_eq * jnp.mean(
@@ -148,7 +148,7 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     )
     
     # eval cost function of problem definition        
-    J_cost_function = cost_fn(f, cost, running_cost, X, U, K, theta)
+    J_cost_function = evaluate_cost(f, cost, running_cost, X, U, K, parameters)
     
     # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(
@@ -158,15 +158,15 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
 
 
-def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
+def __feasibility_metric_penality_method(variables, parameters_of_dynamic_model, static_parameters ):
     
-    K, theta, x0                                                            = parameters
+    K, parameters, x0                                                            = parameters_of_dynamic_model
     f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U                                                                    = variables
     
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_constraints, X, U, K, x0, theta, 0)
-    c_ineq = inequality_constraints(X, U, K, theta)
+    c_eq = eq_constraint(f, terminal_constraints, X, U, K, x0, parameters, 0)
+    c_ineq = inequality_constraints(X, U, K, parameters)
     
     #
     metric_c_eq   = jnp.max(  jnp.abs(c_eq) )
@@ -177,8 +177,8 @@ def __feasibility_metric_penality_method(variables, parameters, static_parameter
 def objective_penality_method( variables, parameters, static_parameters ):
     return __objective_penality_method( variables, parameters, static_parameters )[0]
 
-def feasibility_metric_penality_method(variables, parameters, static_parameters ):
-    return __feasibility_metric_penality_method(variables, parameters, static_parameters )
+def feasibility_metric_penality_method(variables, parameters_of_dynamic_model, static_parameters ):
+    return __feasibility_metric_penality_method(variables, parameters_of_dynamic_model, static_parameters )
 
 def _check_monotonic_convergence(i, trace):
     """
@@ -207,7 +207,7 @@ def _check_monotonic_convergence(i, trace):
     return is_not_monotonic
         
 
-def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool):
+def _verify_step(verification_state, i, res_inner, variables, parameters_of_dynamic_model, opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool):
     
     trace, _, = verification_state
 
@@ -216,7 +216,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     is_abort_because_of_nonfinite = jnp.logical_not(is_X_finite)
 
     # verify step
-    max_eq_error, max_ineq_error = feasibility_metric_fn(variables, parameters)
+    max_eq_error, max_ineq_error = feasibility_metric_fn(variables, parameters_of_dynamic_model)
     n_iter_inner = res_inner.state.iter_num
     
     # verify metrics and check for convergence
@@ -523,7 +523,7 @@ def optimize_trajectory(
     
     # dynamic
     x0,              # 8
-    theta,           # 9
+    parameters,           # 9
     
     solver_settings, # 10
 
@@ -541,12 +541,11 @@ def optimize_trajectory(
             -- callback functions that describe the problem to solve --
             
             f: 
-                the discrete-time system function with the prototype x_next = f(x, u, k, theta)
+                the discrete-time system function with the prototype x_next = f(x, u, k, parameters)
                 - x: (n_states, )     the state vector
                 - u: (n_inputs, )     the system input(s)
                 - k: scalar           the sampling index
-                - theta: (JAX-pytree) the parameters theta as passed to optimize_trajectory
-                - theta: (JAX-pytree) the parameters theta as passed to optimize_trajectory
+                - parameters: (JAX-pytree) the parameters parameters as passed to optimize_trajectory
             g: 
                 the optional output function g(x, u, k, parameters)
                 - the parameters of the callback have the same meaning as the ones of f
@@ -555,18 +554,18 @@ def optimize_trajectory(
                 function to evaluate the terminal constraints
 
             cost:
-                function to evaluate the cost J = cost(X, U, T, theta)
+                function to evaluate the cost J = cost(X, U, T, parameters)
                 Unlike running_cost, the entire vectors for the state X and actuation U trajectories
                 are passed.
 
             running_cost: 
-                function to evaluate the running costs J = running_cost(x, u, t, theta)
+                function to evaluate the running costs J = running_cost(x, u, t, parameters)
                 Unlike cost, associated samples of the state (x) and the actuation trajectory (u) 
                 are passed.
                 
             inequality_constraints: 
                 a function to evaluate the inequality constraints and prototype 
-                c_neq = inequality_constraints(x, u, k, theta)
+                c_neq = inequality_constraints(x, u, k, parameters)
                 
                 A fulfilled constraint is indicated by a the value c_neq[] >= 0.
 
@@ -574,7 +573,7 @@ def optimize_trajectory(
                 a function (or None) that is called to transform the problem parameters before
                 running the optimization, i.e.,
 
-                theta_transformed = transform_parameters(theta)
+                parameters_transformed = transform_parameters(parameters)
 
                 The transformed parameters are then used for finding the solution.            
                 
@@ -594,7 +593,7 @@ def optimize_trajectory(
 
                 or a callable function the returns such a dictionary. 
             
-            theta: (JAX-pytree)
+            parameters: (JAX-pytree)
                 parameters to the system model that are forwarded to f, g, running_cost
                         
             -- static parameters (no jax-arrays or pytrees) --
@@ -656,10 +655,10 @@ def optimize_trajectory(
 
     #
     if callable(transform_parameters):
-        theta = transform_parameters(theta)
+        parameters = transform_parameters(parameters)
 
     if callable(initial_guess):
-        initial_guess = initial_guess(x0, theta)
+        initial_guess = initial_guess(x0, parameters)
 
     X_guess, U_guess = initial_guess['X_guess'], initial_guess['U_guess']
     
@@ -681,7 +680,7 @@ def optimize_trajectory(
     K = jnp.arange(n_steps)
 
     # pack parameters and variables
-    parameters_of_dynamic_model        = (K, theta, x0, )
+    parameters_of_dynamic_model        = (K, parameters, x0, )
     static_parameters = (f, terminal_constraints, inequality_constraints, cost, running_cost)
     variables         = (X_guess, U_guess)
 
@@ -715,14 +714,14 @@ def optimize_trajectory(
     X_opt, U_opt = variables_star
     
     # evaluate the constraint functions one last time to return the residuals 
-    c_eq   = eq_constraint(f, terminal_constraints, X_opt, U_opt, K, x0, theta, 0)
-    c_ineq = inequality_constraints(X_opt, U_opt, K, theta)
+    c_eq   = eq_constraint(f, terminal_constraints, X_opt, U_opt, K, x0, parameters, 0)
+    c_ineq = inequality_constraints(X_opt, U_opt, K, parameters)
     
     # compute systems outputs for the optimized trajectory
     system_outputs = None
     if g is not None:
         g_ = jax.vmap(g, in_axes=(0, 0, 0, None))
-        system_outputs = g_(X_opt, U_opt, K, theta)
+        system_outputs = g_(X_opt, U_opt, K, parameters)
         
     # collect results
     res = {
@@ -754,7 +753,7 @@ class Solver:
             (
                 f, g, running_cost, 
                 terminal_constraints, inequality_constraints, 
-                theta, x0, initial_guess
+                parameters, x0, initial_guess
 
             ) = _problem_definition
 
@@ -765,7 +764,7 @@ class Solver:
                 'terminal_constraints': terminal_constraints,
                 'inequality_constraints' : inequality_constraints,
                 'initial_guess' : initial_guess,
-                'parameters' : theta,
+                'parameters' : parameters,
                 'x0' : x0,
             } 
 
@@ -832,9 +831,6 @@ class Solver:
         
         return solver_return
     
-@property
-def theta(self, theta):
-    self.problem_definition['parameters'] = theta
 
 
 def unpack_res(res):
