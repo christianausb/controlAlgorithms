@@ -68,7 +68,7 @@ def boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
 # routine for state estimation and parameter identification
 #
 
-def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0, theta, power):
+def eq_constraint(f, terminal_constraints, X_opt_var, U_opt_var, K, x0, theta, power):
     """
     algebraic constraints for the system dynamics
     """
@@ -80,20 +80,20 @@ def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0,
     # compute c_eq( i ) = x( i+1 ) - x_next( i ) for all i
     c_eq_running =  jnp.exp2(power) * X[1:] -  jnp.exp2(power) * X_next
 
-    if terminal_state_eq_constraints is not None:
+    if terminal_constraints is not None:
         # terminal constraints are defined
         x_terminal = X_opt_var[-1]
         
         
-        number_parameters_to_terminal_fn =len( signature( terminal_state_eq_constraints ).parameters )
+        number_parameters_to_terminal_fn =len( signature( terminal_constraints ).parameters )
         if number_parameters_to_terminal_fn == 2:
             # the constraint function implements the power parameter
             
-            c_eq_terminal = jnp.exp2(power) * terminal_state_eq_constraints(x_terminal, theta)
+            c_eq_terminal = jnp.exp2(power) * terminal_constraints(x_terminal, theta)
             
         elif number_parameters_to_terminal_fn == 3:
             
-            c_eq_terminal = terminal_state_eq_constraints(x_terminal, theta, power)
+            c_eq_terminal = terminal_constraints(x_terminal, theta, power)
         
         
         # total
@@ -129,7 +129,7 @@ def cost_fn(f, cost, running_cost, X, U, K, theta):
 def __objective_penality_method( variables, parameters, static_parameters ):
     
     K, theta, x0, opt_t, opt_c_eq                                           = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
+    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U                                                                    = variables
     
     n_steps = X.shape[0]
@@ -139,8 +139,8 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     power = 0
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, power).reshape(-1)
-    c_ineq = inequ_constraints(X, U, K, theta).reshape(-1)        
+    c_eq = eq_constraint(f, terminal_constraints, X, U, K, x0, theta, power).reshape(-1)
+    c_ineq = inequality_constraints(X, U, K, theta).reshape(-1)        
 
     # equality constraints using penality method    
     J_equality_costs = opt_c_eq * jnp.mean(
@@ -161,12 +161,12 @@ def __objective_penality_method( variables, parameters, static_parameters ):
 def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
     
     K, theta, x0                                                            = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
+    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U                                                                    = variables
     
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, 0)
-    c_ineq = inequ_constraints(X, U, K, theta)
+    c_eq = eq_constraint(f, terminal_constraints, X, U, K, x0, theta, 0)
+    c_ineq = inequality_constraints(X, U, K, theta)
     
     #
     metric_c_eq   = jnp.max(  jnp.abs(c_eq) )
@@ -514,8 +514,8 @@ def optimize_trajectory(
     # static
     f, 
     g,
-    terminal_state_eq_constraints,
-    inequ_constraints,
+    terminal_constraints,
+    inequality_constraints,
     cost,
     running_cost,
     initial_guess,   # 6
@@ -550,7 +550,7 @@ def optimize_trajectory(
                 the optional output function g(x, u, k, theta)
                 - the parameters of the callback have the same meaning like with the callback f
             
-            terminal_state_eq_constraints:
+            terminal_constraints:
                 function to evaluate the terminal constraints
 
             cost:
@@ -563,9 +563,9 @@ def optimize_trajectory(
                 Unlike cost, associated samples of the state (x) and the actuation trajectory (u) 
                 are passed.
                 
-            inequ_constraints: 
+            inequality_constraints: 
                 a function to evaluate the inequality constraints and prototype 
-                c_neq = inequ_constraints(x, u, k, theta)
+                c_neq = inequality_constraints(x, u, k, theta)
                 
                 A fulfilled constraint is indicated by a the value c_neq[] >= 0.
 
@@ -682,7 +682,7 @@ def optimize_trajectory(
 
     # pack parameters and variables
     parameters        = (K, theta, x0, )
-    static_parameters = (f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost)
+    static_parameters = (f, terminal_constraints, inequality_constraints, cost, running_cost)
     variables         = (X_guess, U_guess)
 
     # pass static parameters into objective function
@@ -715,8 +715,8 @@ def optimize_trajectory(
     X_opt, U_opt = variables_star
     
     # evaluate the constraint functions one last time to return the residuals 
-    c_eq   = eq_constraint(f, terminal_state_eq_constraints, X_opt, U_opt, K, x0, theta, 0)
-    c_ineq = inequ_constraints(X_opt, U_opt, K, theta)
+    c_eq   = eq_constraint(f, terminal_constraints, X_opt, U_opt, K, x0, theta, 0)
+    c_ineq = inequality_constraints(X_opt, U_opt, K, theta)
     
     # compute systems outputs for the optimized trajectory
     system_outputs = None
@@ -753,8 +753,8 @@ class Solver:
             # for compatibility / remove this
             (
                 f, g, running_cost, 
-                terminal_state_eq_constraints, inequ_constraints, 
-                theta, x0, make_guess
+                terminal_constraints, inequality_constraints, 
+                theta, x0, initial_guess
 
             ) = _problem_definition
 
@@ -762,9 +762,9 @@ class Solver:
                 'f' : f,
                 'g' : g,
                 'running_cost' : running_cost,
-                'terminal_state_eq_constraints': terminal_state_eq_constraints,
-                'inequ_constraints' : inequ_constraints,
-                'make_guess' : make_guess,
+                'terminal_constraints': terminal_constraints,
+                'inequality_constraints' : inequality_constraints,
+                'initial_guess' : initial_guess,
                 'theta' : theta,
                 'x0' : x0,
             } 
@@ -776,7 +776,7 @@ class Solver:
 
         self.solver_settings = get_default_solver_settings()
         
-        initial_guess = self.problem_definition['make_guess'](
+        initial_guess = self.problem_definition['initial_guess'](
             self.problem_definition['x0'], self.problem_definition['theta']
         )
 
@@ -800,11 +800,11 @@ class Solver:
         solver_return = optimize_trajectory(
             self.problem_definition['f'], 
             self.problem_definition['g'],
-            self.problem_definition['terminal_state_eq_constraints'],
-            self.problem_definition['inequ_constraints'],
+            self.problem_definition['terminal_constraints'],
+            self.problem_definition['inequality_constraints'],
             self.problem_definition.get('cost'),
             self.problem_definition.get('running_cost'),
-            self.problem_definition['make_guess'],
+            self.problem_definition['initial_guess'],
             self.problem_definition.get('transform_parameters'), 
 
             self.problem_definition['x0'],
