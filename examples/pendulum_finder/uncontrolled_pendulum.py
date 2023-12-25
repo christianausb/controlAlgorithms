@@ -161,7 +161,7 @@ def build_pendulum_model_estimate_objective_tf_function(wy, wx1, wx2, max_time, 
         input_signature=[
             tf.TensorSpec(shape=(n_steps, 1), dtype=tf.float32, name='Y_measurement'),
             tf.TensorSpec(shape=(n_steps, 2), dtype=tf.float32, name='X'),
-            tf.TensorSpec(shape=(3, ),        dtype=tf.float32, name='parameters'),
+            tf.TensorSpec(shape=(3, ),        dtype=tf.float32, name='theta'),
             tf.TensorSpec(shape=(   ),        dtype=tf.float32, name='lam'),
         ],
     )
@@ -221,7 +221,7 @@ def build_pendulum_model_estimate_objective2_tf_function(wy1, wy2, wx1, wx2, max
         input_signature=[
             tf.TensorSpec(shape=(n_steps, 2), dtype=tf.float32, name='Y_measurement'),
             tf.TensorSpec(shape=(n_steps, 2), dtype=tf.float32, name='X'),
-            tf.TensorSpec(shape=(3, ),        dtype=tf.float32, name='parameters'),
+            tf.TensorSpec(shape=(3, ),        dtype=tf.float32, name='theta'),
             tf.TensorSpec(shape=(   ),        dtype=tf.float32, name='lam'),
         ],
         reduce_retracing=True,
