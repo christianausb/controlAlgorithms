@@ -513,7 +513,7 @@ def get_default_solver_settings():
     
     return solver_settings
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7,    11, 12, 13, 14))
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14))
 def optimize_trajectory(
     # static
     f, 
@@ -527,7 +527,7 @@ def optimize_trajectory(
     
     # dynamic
     x0,              # 8
-    parameters,           # 9
+    parameters,      # 9
     
     solver_settings, # 10
 
@@ -539,6 +539,8 @@ def optimize_trajectory(
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
+
+        The penality method is used to implement inequality constraints.
         
         Args:
         

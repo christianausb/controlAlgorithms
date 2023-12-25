@@ -19,7 +19,7 @@ def solve_and_plot(solver, plot_fn):
 
     return plot_output
 
-def manual_investigate(solver, sliders, set_theta_fn, plot_fn):
+def manual_investigate(solver, sliders, set_parameter_fn, plot_fn):
     
     # Create Output widgets for print outputs and plot
     print_output = widgets.Output()
@@ -33,7 +33,7 @@ def manual_investigate(solver, sliders, set_theta_fn, plot_fn):
         with print_output:
             IPython.display.clear_output(wait=True)  # Clear previous print outputs
 
-            set_theta_fn(solver, **kwargs)
+            set_parameter_fn(solver, **kwargs)
             X_opt, U_opt, system_outputs, res = solver.run()
         
         
