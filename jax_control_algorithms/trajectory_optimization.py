@@ -15,20 +15,23 @@ import time
 
 def constraint_geq(x, v):
     """
+        define 'greater than' inequality constraint
+        
         x >= v
     """
     return x - v
 
 def constraint_leq(x, v):
     """
+        define 'less than' inequality constraint
+
         x <= v
     """
     return v - x
 
-
-def boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
+def _boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
     """
-    computes the boundary function of x
+        computes the boundary function of x
     """
     
     # assert y_max > 0
@@ -61,39 +64,33 @@ def boundary_fn(x, t_opt, y_max = 10, is_continue_linear=False):
     )
     
     return y
-     
 
-
-#
-# routine for state estimation and parameter identification
-#
-
-def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0, theta, power):
+def _eq_constraint(f, terminal_constraints, X_opt_var, U_opt_var, K, x0, parameters, power):
     """
-    algebraic constraints for the system dynamics
+        algebraic constraints for the system dynamics
     """
 
     X = jnp.vstack(( x0 , X_opt_var ))
     
-    X_next = eval_X_next(f, X[:-1], U_opt_var, K, theta)
+    X_next = eval_X_next(f, X[:-1], U_opt_var, K, parameters)
 
     # compute c_eq( i ) = x( i+1 ) - x_next( i ) for all i
     c_eq_running =  jnp.exp2(power) * X[1:] -  jnp.exp2(power) * X_next
 
-    if terminal_state_eq_constraints is not None:
+    if terminal_constraints is not None:
         # terminal constraints are defined
         x_terminal = X_opt_var[-1]
         
         
-        number_parameters_to_terminal_fn =len( signature( terminal_state_eq_constraints ).parameters )
+        number_parameters_to_terminal_fn =len( signature( terminal_constraints ).parameters )
         if number_parameters_to_terminal_fn == 2:
             # the constraint function implements the power parameter
             
-            c_eq_terminal = jnp.exp2(power) * terminal_state_eq_constraints(x_terminal, theta)
+            c_eq_terminal = jnp.exp2(power) * terminal_constraints(x_terminal, parameters)
             
         elif number_parameters_to_terminal_fn == 3:
             
-            c_eq_terminal = terminal_state_eq_constraints(x_terminal, theta, power)
+            c_eq_terminal = terminal_constraints(x_terminal, parameters, power)
         
         
         # total
@@ -104,33 +101,33 @@ def eq_constraint(f, terminal_state_eq_constraints, X_opt_var, U_opt_var, K, x0,
 
     return c_eq
     
-def vectorize_running_cost(f_rk):
+def _vectorize_running_cost(f_rk):
     """ 
-        vectorize the running cost function running_cost(x, u, t, theta)
+        vectorize the running cost function running_cost(x, u, t, parameters)
     """
     return jax.vmap( f_rk, in_axes=(0, 0, 0, None) )
   
 
-def cost_fn(f, cost, running_cost, X, U, K, theta):
+def _evaluate_cost(f, cost, running_cost, X, U, K, parameters):
     """
         evaluate the cost of the given configuration X, U
     """
 
     assert callable(cost) or callable(running_cost), 'no cost function was given'
  
-    cost = cost(X, U, K, theta) if callable(cost) else 0
+    cost = cost(X, U, K, parameters) if callable(cost) else 0
 
     running_cost = jnp.mean( # TODO: remove mean()
-        vectorize_running_cost(running_cost)(X, U, K, theta) if callable(running_cost) else 0
+        _vectorize_running_cost(running_cost)(X, U, K, parameters) if callable(running_cost) else 0
     )
 
     return cost + running_cost
 
-def __objective_penality_method( variables, parameters, static_parameters ):
+def __objective_penality_method( variables, parameters_passed_to_solver, static_parameters ):
     
-    K, theta, x0, opt_t, opt_c_eq                                           = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
-    X, U                                                                    = variables
+    K, parameters, x0, opt_t, opt_c_eq                                  = parameters_passed_to_solver
+    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
+    X, U                                                                = variables
     
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
@@ -139,8 +136,8 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     power = 0
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, power).reshape(-1)
-    c_ineq = inequ_constraints(X, U, K, theta).reshape(-1)        
+    c_eq = _eq_constraint(f, terminal_constraints, X, U, K, x0, parameters, power).reshape(-1)
+    c_ineq = inequality_constraints(X, U, K, parameters).reshape(-1)        
 
     # equality constraints using penality method    
     J_equality_costs = opt_c_eq * jnp.mean(
@@ -148,37 +145,33 @@ def __objective_penality_method( variables, parameters, static_parameters ):
     )
     
     # eval cost function of problem definition        
-    J_cost_function = cost_fn(f, cost, running_cost, X, U, K, theta)
+    J_cost_function = _evaluate_cost(f, cost, running_cost, X, U, K, parameters)
     
     # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(
-        boundary_fn(c_ineq, opt_t, 11, True)
+        _boundary_fn(c_ineq, opt_t, 11, True)
     )
     
     return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
 
+def _objective_penality_method( variables, parameters, static_parameters ):
+    return __objective_penality_method( variables, parameters, static_parameters )[0]
 
-def __feasibility_metric_penality_method(variables, parameters, static_parameters ):
+def _feasibility_metric_penality_method(variables, parameters_of_dynamic_model, static_parameters ):
     
-    K, theta, x0                                                            = parameters
-    f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost = static_parameters
-    X, U                                                                    = variables
+    K, parameters, x0                                                   = parameters_of_dynamic_model
+    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
+    X, U                                                                = variables
     
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eq_constraint(f, terminal_state_eq_constraints, X, U, K, x0, theta, 0)
-    c_ineq = inequ_constraints(X, U, K, theta)
+    c_eq = _eq_constraint(f, terminal_constraints, X, U, K, x0, parameters, 0)
+    c_ineq = inequality_constraints(X, U, K, parameters)
     
     #
     metric_c_eq   = jnp.max(  jnp.abs(c_eq) )
     metric_c_ineq = jnp.max( -jnp.where( c_ineq > 0, 0, c_ineq ) )
     
     return metric_c_eq, metric_c_ineq
-
-def objective_penality_method( variables, parameters, static_parameters ):
-    return __objective_penality_method( variables, parameters, static_parameters )[0]
-
-def feasibility_metric_penality_method(variables, parameters, static_parameters ):
-    return __feasibility_metric_penality_method(variables, parameters, static_parameters )
 
 def _check_monotonic_convergence(i, trace):
     """
@@ -207,7 +200,14 @@ def _check_monotonic_convergence(i, trace):
     return is_not_monotonic
         
 
-def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool):
+def _verify_step(
+        verification_state, i, res_inner, variables, parameters_of_dynamic_model, 
+        opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool
+):
+    """
+        verify the feasibility of the current state of the solution. This function is executed 
+        for each iteration of the outer optimization loop.
+    """
     
     trace, _, = verification_state
 
@@ -216,7 +216,7 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     is_abort_because_of_nonfinite = jnp.logical_not(is_X_finite)
 
     # verify step
-    max_eq_error, max_ineq_error = feasibility_metric_fn(variables, parameters)
+    max_eq_error, max_ineq_error = feasibility_metric_fn(variables, parameters_of_dynamic_model)
     n_iter_inner = res_inner.state.iter_num
     
     # verify metrics and check for convergence
@@ -270,25 +270,22 @@ def _verify_step(verification_state, i, res_inner, variables, parameters, opt_t,
     # verification_state, is_finished, is_abort, i_best            
     return verification_state_next, is_converged, is_eq_converged, is_abort, is_X_finite, i_best
 
-def _optimize_trajectory( 
-        i, variables, parameters, opt_t, opt_c_eq, verification_state_init, 
-        
-        # lam,
-        # tol_inner, 
-        # t_final, 
-        # max_iter_boundary_method,
-        # max_iter_inner,
-        
+def _run_outer_loop(
+        i, variables, parameters_of_dynamic_model, opt_t, opt_c_eq, verification_state_init,
         solver_settings,
-
         objective_fn, verification_fn,
         verbose, print_errors, target_dtype
     ):
+    """
+        Execute the outer loop of the optimization process: herein in each iteration, the parameters of the
+        boundary function and the quality cost weight factor are adjusted so that in the final iteration 
+        the equality and inequality constraints are fulfilled.
+    """
 
     # convert dtypes
-    ( variables, parameters, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
+    ( variables, parameters_of_dynamic_model, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
         ( 
-            variables, parameters, 
+            variables, parameters_of_dynamic_model, 
             opt_t, opt_c_eq, 
             verification_state_init, 
             solver_settings['lam'], solver_settings['tol_inner'], 
@@ -306,21 +303,21 @@ def _optimize_trajectory(
     def loop_body(loop_par):
             
         #
-        parameters_ = loop_par['parameters'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
+        parameters_passed_to_inner_solver = loop_par['parameters_of_dynamic_model'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
 
-        # run optimization
+        # run inner solver
         gd = jaxopt.BFGS(
             fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=solver_settings['max_iter_inner']
             )
-        res = gd.run(loop_par['variables'], parameters=parameters_)
+        res = gd.run(loop_par['variables'], parameters=parameters_passed_to_inner_solver)
         _variables_next = res.params
 
-        # run callback
+        # run callback to verify the solution
         verification_state_next, is_finished, is_eq_converged, is_abort, is_X_finite, i_best = verification_fn(
             loop_par['verification_state'], 
             loop_par['i'], 
             res, _variables_next, 
-            loop_par['parameters'], 
+            loop_par['parameters_of_dynamic_model'], 
             loop_par['opt_t']
         )
 
@@ -339,11 +336,11 @@ def _optimize_trajectory(
             loop_par['opt_c_eq'] * lam,
         )
 
-        #
+        # use previous state of the iteration in case of abortion (when is_abort == True)
         variables_next = (
             jnp.where(
                 is_abort, 
-                loop_par['variables'][0],      # use previous state of the iteration in case of abortion
+                loop_par['variables'][0],      
                 _variables_next[0] #
             ),
             jnp.where(
@@ -361,13 +358,13 @@ def _optimize_trajectory(
             'is_abort'    : is_abort,
             'is_X_finite' : is_X_finite,
             'variables'   : variables_next, 
-            'parameters'  : loop_par['parameters'], 
+            'parameters_of_dynamic_model'  : loop_par['parameters_of_dynamic_model'], 
             'opt_t'       : opt_t_next, 
             'opt_c_eq'    : opt_c_eq_next, 
             'i'           : loop_par['i'] + 1,
             'verification_state' : verification_state_next, 
             'tol_inner'   : loop_par['tol_inner'], 
-            't_final'       : loop_par['t_final'],
+            't_final'     : loop_par['t_final'],
         }
 
         return loop_par
@@ -402,7 +399,7 @@ def _optimize_trajectory(
         'is_abort'    : jnp.array(False, dtype=jnp.bool_),
         'is_X_finite' : jnp.array(True,  dtype=jnp.bool_),
         'variables'     : variables, 
-        'parameters' : parameters, 
+        'parameters_of_dynamic_model' : parameters_of_dynamic_model, 
         'opt_t' : opt_t, 
         'opt_c_eq' : opt_c_eq, 
         'i' : i, 
@@ -417,7 +414,66 @@ def _optimize_trajectory(
 
     return loop_par['variables'], loop_par['opt_t'], loop_par['opt_c_eq'], n_iter, loop_par['verification_state']
 
+def _solve(
+    variables, parameters_of_dynamic_model, solver_settings, 
+    trace_init, 
+    objective_, verification_fn_, 
+    max_float32_iterations, enable_float64, 
+    verbose
+):
+    """
+        execute the solution finding process
+    """
 
+    opt_t    = solver_settings['opt_t_init']
+    opt_c_eq = solver_settings['c_eq_init']
+    i = 0
+    verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
+
+    # iterations that are performed using float32 datatypes
+    if max_float32_iterations > 0:
+        variables, opt_t, opt_c_eq, n_iter_f32, verification_state = _run_outer_loop( 
+            i, 
+            variables, parameters_of_dynamic_model, 
+            jnp.array(opt_t, dtype=jnp.float32),
+            jnp.array(opt_c_eq, dtype=jnp.float32),
+            verification_state, 
+            solver_settings,
+            objective_, verification_fn_,
+            verbose, 
+            False, # show_errors
+            target_dtype=jnp.float32
+        )
+
+        i = i + n_iter_f32
+
+        if verbose:
+            jax.debug.print("👉 switching to higher numerical precision after {n_iter_f32} iterations: float32 --> float64", n_iter_f32=n_iter_f32)
+
+    # iterations that are performed using float64 datatypes
+    if enable_float64:
+        variables, opt_t, opt_c_eq, n_iter_f64, verification_state = _run_outer_loop( 
+            i, 
+            variables, parameters_of_dynamic_model, 
+            jnp.array(opt_t, dtype=jnp.float64),
+            jnp.array(opt_c_eq, dtype=jnp.float64),
+            verification_state, 
+            solver_settings,            
+            objective_, verification_fn_,
+            verbose, 
+            True if verbose else False, # show_errors
+            target_dtype=jnp.float64
+        )
+        i = i + n_iter_f64
+
+
+    n_iter = i
+    variables_star = variables
+    trace = get_trace_data( verification_state[0] )
+
+    is_converged = verification_state[1]
+
+    return variables_star, is_converged, n_iter, trace
 
 def _get_sizes(X_guess, U_guess, x0):
     n_steps = U_guess.shape[0]
@@ -446,24 +502,24 @@ def get_default_solver_settings():
 
     solver_settings = {
         'max_iter_boundary_method' : 40,
-        'max_iter_inner' : 5000,
-        'c_eq_init' : 100.0,
-        'opt_t_init' : 0.5, 
-        'lam' : 1.6,    
-        'eq_tol' : 0.0001,
-        't_final' : 100.0,
-        'tol_inner' : 0.0001,
+        'max_iter_inner'           : 5000,
+        'c_eq_init'                : 100.0,
+        'opt_t_init'               : 0.5, 
+        'lam'                      : 1.6,    
+        'eq_tol'                   : 0.0001,
+        't_final'                  : 100.0,
+        'tol_inner'                : 0.0001,
     }
     
     return solver_settings
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7,    11, 12, 13, 14))
+@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14))
 def optimize_trajectory(
     # static
     f, 
     g,
-    terminal_state_eq_constraints,
-    inequ_constraints,
+    terminal_constraints,
+    inequality_constraints,
     cost,
     running_cost,
     initial_guess,   # 6
@@ -471,7 +527,7 @@ def optimize_trajectory(
     
     # dynamic
     x0,              # 8
-    theta,           # 9
+    parameters,      # 9
     
     solver_settings, # 10
 
@@ -483,37 +539,39 @@ def optimize_trajectory(
 ):
     """
         Find the optimal control sequence for a given dynamic system, cost function and constraints
+
+        The penality method is used to implement inequality constraints.
         
         Args:
         
             -- callback functions that describe the problem to solve --
             
             f: 
-                the discrete-time system function with the prototype x_next = f(x, u, k, theta)
+                the discrete-time system function with the prototype x_next = f(x, u, k, parameters)
                 - x: (n_states, )     the state vector
                 - u: (n_inputs, )     the system input(s)
                 - k: scalar           the sampling index
-                - theta: (JAX-pytree) the parameters theta as passed to optimize_trajectory
+                - parameters: (JAX-pytree) the parameters parameters as passed to optimize_trajectory
             g: 
-                the optional output function g(x, u, k, theta)
-                - the parameters of the callback have the same meaning like with the callback f
-            
-            terminal_state_eq_constraints:
+                the optional output function g(x, u, k, parameters)
+                - the parameters of the callback have the same meaning as the ones of f
+
+            terminal_constraints:
                 function to evaluate the terminal constraints
 
             cost:
-                function to evaluate the cost J = cost(X, U, T, theta)
+                function to evaluate the cost J = cost(X, U, T, parameters)
                 Unlike running_cost, the entire vectors for the state X and actuation U trajectories
                 are passed.
 
             running_cost: 
-                function to evaluate the running costs J = running_cost(x, u, t, theta)
+                function to evaluate the running costs J = running_cost(x, u, t, parameters)
                 Unlike cost, associated samples of the state (x) and the actuation trajectory (u) 
                 are passed.
                 
-            inequ_constraints: 
+            inequality_constraints: 
                 a function to evaluate the inequality constraints and prototype 
-                c_neq = inequ_constraints(x, u, k, theta)
+                c_neq = inequality_constraints(x, u, k, parameters)
                 
                 A fulfilled constraint is indicated by a the value c_neq[] >= 0.
 
@@ -521,7 +579,7 @@ def optimize_trajectory(
                 a function (or None) that is called to transform the problem parameters before
                 running the optimization, i.e.,
 
-                theta_transformed = transform_parameters(theta)
+                parameters_transformed = transform_parameters(parameters)
 
                 The transformed parameters are then used for finding the solution.            
                 
@@ -541,11 +599,10 @@ def optimize_trajectory(
 
                 or a callable function the returns such a dictionary. 
             
-            theta: (JAX-pytree)
-                parameters to the system model that are forwarded to f, g, cost_fn
+            parameters: (JAX-pytree)
+                parameters to the system model that are forwarded to f, g, running_cost
                         
-                        
-            -- static parameters (no jax datatypes) --
+            -- static parameters (no jax-arrays or pytrees) --
             
             max_iter_boundary_method: int
                 The maximum number of iterations to apply the boundary method.
@@ -604,10 +661,10 @@ def optimize_trajectory(
 
     #
     if callable(transform_parameters):
-        theta = transform_parameters(theta)
+        parameters = transform_parameters(parameters)
 
     if callable(initial_guess):
-        initial_guess = initial_guess(x0, theta)
+        initial_guess = initial_guess(x0, parameters)
 
     X_guess, U_guess = initial_guess['X_guess'], initial_guess['U_guess']
     
@@ -629,13 +686,13 @@ def optimize_trajectory(
     K = jnp.arange(n_steps)
 
     # pack parameters and variables
-    parameters        = (K, theta, x0, )
-    static_parameters = (f, terminal_state_eq_constraints, inequ_constraints, cost, running_cost)
+    parameters_of_dynamic_model        = (K, parameters, x0, )
+    static_parameters = (f, terminal_constraints, inequality_constraints, cost, running_cost)
     variables         = (X_guess, U_guess)
 
     # pass static parameters into objective function
-    objective_          = partial(objective_penality_method,          static_parameters=static_parameters)
-    feasibility_metric_ = partial(feasibility_metric_penality_method, static_parameters=static_parameters)
+    objective_          = partial(_objective_penality_method,          static_parameters=static_parameters)
+    feasibility_metric_ = partial(_feasibility_metric_penality_method, static_parameters=static_parameters)
 
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
@@ -650,125 +707,56 @@ def optimize_trajectory(
         ( jnp.nan, jnp.nan, -1, jnp.nan*jnp.zeros_like(X_guess), jnp.nan*jnp.zeros_like(U_guess) )
     )
 
-    #
-    # iterate: TODO: put into function 
-    #
-
-    opt_t    = solver_settings['opt_t_init']
-    opt_c_eq = solver_settings['c_eq_init']
-    i = 0
-    verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
-
-    # float32
-    if max_float32_iterations > 0:
-        variables, opt_t, opt_c_eq, n_iter_f32, verification_state = _optimize_trajectory( 
-            i, 
-            variables, parameters, 
-            jnp.array(opt_t, dtype=jnp.float32),
-            jnp.array(opt_c_eq, dtype=jnp.float32),
-            verification_state, 
-            solver_settings,
-            objective_, verification_fn_,
-            verbose, 
-            False, # show_errors
-            target_dtype=jnp.float32
-        )
-
-        i = i + n_iter_f32
-
-        if verbose:
-            jax.debug.print("👉 switching to higher numerical precision after {n_iter_f32} iterations: float32 --> float64", n_iter_f32=n_iter_f32)
-
-    # float64
-    if enable_float64:
-        variables, opt_t, opt_c_eq, n_iter_f64, verification_state = _optimize_trajectory( 
-            i, 
-            variables, parameters, 
-            jnp.array(opt_t, dtype=jnp.float64),
-            jnp.array(opt_c_eq, dtype=jnp.float64),
-            verification_state, 
-            solver_settings,            
-            objective_, verification_fn_,
-            verbose, 
-            True if verbose else False, # show_errors
-            target_dtype=jnp.float64
-        )
-        i = i + n_iter_f64
-
-
-    n_iter = i
-    variables_star = variables
-    trace = get_trace_data( verification_state[0] )
-
-    is_converged = verification_state[1]
-
-    #
-    # end iterate
-    #
+    # run solver
+    variables_star, is_converged, n_iter, trace = _solve(
+        variables, parameters_of_dynamic_model, solver_settings, 
+        trace_init, 
+        objective_, verification_fn_, 
+        max_float32_iterations, enable_float64, 
+        verbose
+    )
 
     # unpack results for optimized variables
     X_opt, U_opt = variables_star
     
     # evaluate the constraint functions one last time to return the residuals 
-    c_eq   = eq_constraint(f, terminal_state_eq_constraints, X_opt, U_opt, K, x0, theta, 0)
-    c_ineq = inequ_constraints(X_opt, U_opt, K, theta)
+    c_eq   = _eq_constraint(f, terminal_constraints, X_opt, U_opt, K, x0, parameters, 0)
+    c_ineq = inequality_constraints(X_opt, U_opt, K, parameters)
     
     # compute systems outputs for the optimized trajectory
     system_outputs = None
     if g is not None:
         g_ = jax.vmap(g, in_axes=(0, 0, 0, None))
-        system_outputs = g_(X_opt, U_opt, K, theta)
+        system_outputs = g_(X_opt, U_opt, K, parameters)
         
     # collect results
     res = {
-        'is_converged' : is_converged,
-        'n_iter' : n_iter,
-        'c_eq' : c_eq,
-        'c_ineq' : c_ineq,
-        'trace' : trace,
-        'trace_metric_c_eq' : trace[0],
+        'is_converged'        : is_converged,
+        'n_iter'              : n_iter,
+        'c_eq'                : c_eq,
+        'c_ineq'              : c_ineq,
+        'trace'               : trace,
+        'trace_metric_c_eq'   : trace[0],
         'trace_metric_c_ineq' : trace[1],
     }
 
     return jnp.vstack(( x0, X_opt )), U_opt, system_outputs, res
 
-
 class Solver:
+    """
+        High-level interface to the solver
+    """
     def __init__(self, problem_def_fn, use_continuation=False):
         self.problem_def_fn = problem_def_fn
         
         # get problem definition
-        _problem_definition = problem_def_fn()
-
-        if type(_problem_definition) is tuple:
-            # for compatibility / remove this
-            (
-                f, g, running_cost, 
-                terminal_state_eq_constraints, inequ_constraints, 
-                theta, x0, make_guess
-
-            ) = _problem_definition
-
-            self.problem_definition = {
-                'f' : f,
-                'g' : g,
-                'running_cost' : running_cost,
-                'terminal_state_eq_constraints': terminal_state_eq_constraints,
-                'inequ_constraints' : inequ_constraints,
-                'make_guess' : make_guess,
-                'theta' : theta,
-                'x0' : x0,
-            } 
-
-
-        elif type(_problem_definition) is dict:
-            self.problem_definition = _problem_definition
-
+        self.problem_definition = problem_def_fn()
+        assert type(self.problem_definition) is dict
 
         self.solver_settings = get_default_solver_settings()
         
-        initial_guess = self.problem_definition['make_guess'](
-            self.problem_definition['x0'], self.problem_definition['theta']
+        initial_guess = self.problem_definition['initial_guess'](
+            self.problem_definition['x0'], self.problem_definition['parameters']
         )
 
         # derive the number of sampling instants from the initial guess
@@ -791,15 +779,15 @@ class Solver:
         solver_return = optimize_trajectory(
             self.problem_definition['f'], 
             self.problem_definition['g'],
-            self.problem_definition['terminal_state_eq_constraints'],
-            self.problem_definition['inequ_constraints'],
+            self.problem_definition['terminal_constraints'],
+            self.problem_definition['inequality_constraints'],
             self.problem_definition.get('cost'),
             self.problem_definition.get('running_cost'),
-            self.problem_definition['make_guess'],
+            self.problem_definition['initial_guess'],
             self.problem_definition.get('transform_parameters'), 
 
             self.problem_definition['x0'],
-            self.problem_definition['theta'],
+            self.problem_definition['parameters'],
 
             self.solver_settings,
 
@@ -822,14 +810,11 @@ class Solver:
         self.success = res['is_converged'].tolist()
         
         return solver_return
-    
-@property
-def theta(self, theta):
-    self.problem_definition['theta'] = theta
-
 
 def unpack_res(res):
     """
+        Unpack the results of the solver
+
         is_converged, c_eq, c_ineq, trace, n_iter = unpack_res(res)
     """
     is_converged = res['is_converged']
@@ -844,53 +829,3 @@ def unpack_res(res):
     }
     
     return is_converged, c_eq, c_ineq, traces, n_iter
-    
-    
-    
-
-def plot_array_of_traces(X, n_iter, title_string='', figsize=(8, 5)):
-
-    from matplotlib import cm
-    import matplotlib.pyplot as plt 
-    import numpy as np
-
-    def _get_color(i, i_max, colormap = cm.rainbow):
-        c = float(i) / float(i_max)        
-        cindex = int( i_max * c )
-
-        norm = plt.Normalize(vmin=0, vmax=1)
-        sample_values = np.linspace(0, 1, i_max)
-        rgba_samples = colormap(norm(sample_values))
-        color = rgba_samples[cindex]
-        
-        return color
-
-
-    n_lines = X.shape[2]
-
-    fig, axes = plt.subplots(n_lines, 1, sharex=True, figsize=figsize, squeeze=False)
-
-    for i_ax in range(n_lines):
-        
-        ax = axes[i_ax][0]
-
-        lines = [
-            ax.plot( X[i, :, i_ax], color=_get_color( i, n_iter ) )[0]
-            for i in range(n_iter)
-        ]
-
-        lines[0].set_label('first iteration i=0')
-        lines[-1].set_label('last iteration i=' + str(n_iter-1))
-        ax.legend()
-        ax.set_title(title_string + str(i_ax))
-        
-    return fig
-    
-    
-def plot_iterations(res, figsize=(8, 5)):
-    is_converged, c_eq, c_ineq, traces, n_iter = unpack_res(res)
-
-    fig1 = plot_array_of_traces(traces['X_trace'], res.get('n_iter'), 'state ', figsize)
-    fig2 = plot_array_of_traces(traces['U_trace'], res.get('n_iter'), 'control variable ', figsize)
-    
-    return fig1, fig2
