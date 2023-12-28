@@ -169,9 +169,14 @@ def _feasibility_metric_penality_method(variables, parameters_of_dynamic_model, 
     
     #
     metric_c_eq   = jnp.max(  jnp.abs(c_eq) )
+
+    # check for violations of the boundary 
     metric_c_ineq = jnp.max( -jnp.where( c_ineq > 0, 0, c_ineq ) )
     
-    return metric_c_eq, metric_c_ineq
+    neq_tol = 0.0001
+    is_solution_inside_boundaries = metric_c_ineq < neq_tol # check if the solution is inside (or close) to the boundary
+
+    return metric_c_eq, is_solution_inside_boundaries
 
 def _check_monotonic_convergence(i, trace):
     """
@@ -216,23 +221,21 @@ def _verify_step(
     is_abort_because_of_nonfinite = jnp.logical_not(is_X_finite)
 
     # verify step
-    max_eq_error, max_ineq_error = feasibility_metric_fn(variables, parameters_of_dynamic_model)
+    max_eq_error, is_solution_inside_boundaries = feasibility_metric_fn(variables, parameters_of_dynamic_model)
     n_iter_inner = res_inner.state.iter_num
     
-    # verify metrics and check for convergence
-    neq_tol = 0.0001
 
+    # verify metrics and check for convergence
     is_eq_converged  = max_eq_error < eq_tol
-    is_neq_converged = max_ineq_error < neq_tol # check if the solution is inside (or close) to the boundary
 
     is_converged = jnp.logical_and(
         is_eq_converged,
-        is_neq_converged,
+        is_solution_inside_boundaries,
     )
     
     # trace
     X, U = variables
-    trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, max_ineq_error, n_iter_inner, X, U ) )
+    trace_next, is_trace_appended = append_to_trace(trace, ( max_eq_error, 1.0*is_solution_inside_boundaries, n_iter_inner, X, U ) )
     verification_state_next = ( trace_next, is_converged, )
 
     # check for monotonic convergence of the equality constraints
@@ -250,21 +253,21 @@ def _verify_step(
 
     if verbose:
         jax.debug.print(
-            "🔄 it={i} \t (sub iter={n_iter_inner})\tt/t_final = {opt_t} %\teq_error/eq_tol = {max_eq_error} %\tbounds ok: {is_neq_converged}",
+            "🔄 it={i} \t (sub iter={n_iter_inner})\tt/t_final = {opt_t} %\teq_error/eq_tol = {max_eq_error} %\tinside bounds: {is_solution_inside_boundaries}",
             i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_final, decimals=0)),
             max_eq_error   = my_to_int(my_round(100 * max_eq_error / eq_tol , decimals=0)),
             n_iter_inner   = n_iter_inner,
-            is_neq_converged = is_neq_converged,
+            is_solution_inside_boundaries = is_solution_inside_boundaries,
         )
         
         if False:  # additional info (for debugging purposes)
             jax.debug.print(
                 "   is_abort_because_of_nonfinite={is_abort_because_of_nonfinite} is_not_monotonic={is_not_monotonic}) " + 
-                "is_eq_converged={is_eq_converged}, is_neq_converged={is_neq_converged}",
+                "is_eq_converged={is_eq_converged}, is_solution_inside_boundaries={is_solution_inside_boundaries}",
                 is_abort_because_of_nonfinite=is_abort_because_of_nonfinite,
                 is_not_monotonic=is_not_monotonic,
                 is_eq_converged=is_eq_converged,
-                is_neq_converged=is_neq_converged,
+                is_solution_inside_boundaries=is_solution_inside_boundaries,
             )
     
     # verification_state, is_finished, is_abort, i_best            
@@ -774,7 +777,7 @@ class Solver:
         self.U_opt = None
         self.system_outputs = None
         
-    def run(self):        
+    def run(self):
         start_time = time.time()
         solver_return = optimize_trajectory(
             self.problem_definition['f'], 
