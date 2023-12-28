@@ -125,7 +125,7 @@ def _evaluate_cost(f, cost, running_cost, X, U, K, parameters):
 
 def __objective_penality_method( variables, parameters_passed_to_solver, static_parameters ):
     
-    K, parameters, x0, opt_t, opt_c_eq                                  = parameters_passed_to_solver
+    K, parameters, x0, penality_parameter, opt_c_eq                                  = parameters_passed_to_solver
     f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U                                                                = variables
     
@@ -149,7 +149,7 @@ def __objective_penality_method( variables, parameters_passed_to_solver, static_
     
     # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(
-        _boundary_fn(c_ineq, opt_t, 11, True)
+        _boundary_fn(c_ineq, penality_parameter, 11, True)
     )
     
     return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
@@ -207,7 +207,7 @@ def _check_monotonic_convergence(i, trace):
 
 def _verify_step(
         verification_state, i, res_inner, variables, parameters_of_dynamic_model, 
-        opt_t, feasibility_metric_fn, t_final, eq_tol, verbose : bool
+        penality_parameter, feasibility_metric_fn, t_final, eq_tol, verbose : bool
 ):
     """
         verify the feasibility of the current state of the solution. This function is executed 
@@ -253,8 +253,8 @@ def _verify_step(
 
     if verbose:
         jax.debug.print(
-            "🔄 it={i} \t (sub iter={n_iter_inner})\tt/t_final = {opt_t} %\teq_error/eq_tol = {max_eq_error} %\tinside bounds: {is_solution_inside_boundaries}",
-            i=i,    opt_t  = my_to_int(my_round(100 * opt_t / t_final, decimals=0)),
+            "🔄 it={i} \t (sub iter={n_iter_inner})\tt/t_final = {penality_parameter} %\teq_error/eq_tol = {max_eq_error} %\tinside bounds: {is_solution_inside_boundaries}",
+            i=i,    penality_parameter  = my_to_int(my_round(100 * penality_parameter / t_final, decimals=0)),
             max_eq_error   = my_to_int(my_round(100 * max_eq_error / eq_tol , decimals=0)),
             n_iter_inner   = n_iter_inner,
             is_solution_inside_boundaries = is_solution_inside_boundaries,
@@ -274,7 +274,7 @@ def _verify_step(
     return verification_state_next, is_converged, is_eq_converged, is_abort, is_X_finite, i_best
 
 def _run_outer_loop(
-        i, variables, parameters_of_dynamic_model, opt_t, opt_c_eq, verification_state_init,
+        i, variables, parameters_of_dynamic_model, penality_parameter, opt_c_eq, verification_state_init,
         solver_settings,
         objective_fn, verification_fn,
         verbose, print_errors, target_dtype
@@ -286,10 +286,10 @@ def _run_outer_loop(
     """
 
     # convert dtypes
-    ( variables, parameters_of_dynamic_model, opt_t, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
+    ( variables, parameters_of_dynamic_model, penality_parameter, opt_c_eq, verification_state_init, lam, tol_inner, ) = convert_dtype(
         ( 
             variables, parameters_of_dynamic_model, 
-            opt_t, opt_c_eq, 
+            penality_parameter, opt_c_eq, 
             verification_state_init, 
             solver_settings['lam'], solver_settings['tol_inner'], 
         ),
@@ -300,13 +300,13 @@ def _run_outer_loop(
 
     #
     # loop:
-    # opt_t_init -> opt_t, opt_t = opt_t * lam
+    # penality_parameter_init -> penality_parameter, penality_parameter = penality_parameter * lam
     #
     
     def loop_body(loop_par):
             
         #
-        parameters_passed_to_inner_solver = loop_par['parameters_of_dynamic_model'] + ( loop_par['opt_t'], loop_par['opt_c_eq'], )
+        parameters_passed_to_inner_solver = loop_par['parameters_of_dynamic_model'] + ( loop_par['penality_parameter'], loop_par['opt_c_eq'], )
 
         # run inner solver
         gd = jaxopt.BFGS(
@@ -321,12 +321,12 @@ def _run_outer_loop(
             loop_par['i'], 
             res, _variables_next, 
             loop_par['parameters_of_dynamic_model'], 
-            loop_par['opt_t']
+            loop_par['penality_parameter']
         )
 
         # t-control , t_final -> t_final
-        is_finished = jnp.logical_and(is_finished, loop_par['opt_t'] >= loop_par['t_final'])
-        opt_t_next = jnp.clip(loop_par['opt_t'] * lam, 0, loop_par['t_final']) 
+        is_finished = jnp.logical_and(is_finished, loop_par['penality_parameter'] >= loop_par['final_penality_parameter'])
+        penality_parameter_next = jnp.clip(loop_par['penality_parameter'] * lam, 0, loop_par['final_penality_parameter']) 
 
         # c_eq-control
         opt_c_eq_next = jnp.where(
@@ -362,12 +362,12 @@ def _run_outer_loop(
             'is_X_finite' : is_X_finite,
             'variables'   : variables_next, 
             'parameters_of_dynamic_model'  : loop_par['parameters_of_dynamic_model'], 
-            'opt_t'       : opt_t_next, 
+            'penality_parameter'       : penality_parameter_next, 
             'opt_c_eq'    : opt_c_eq_next, 
             'i'           : loop_par['i'] + 1,
             'verification_state' : verification_state_next, 
             'tol_inner'   : loop_par['tol_inner'], 
-            't_final'     : loop_par['t_final'],
+            'final_penality_parameter'     : loop_par['final_penality_parameter'],
         }
 
         return loop_par
@@ -403,19 +403,19 @@ def _run_outer_loop(
         'is_X_finite' : jnp.array(True,  dtype=jnp.bool_),
         'variables'     : variables, 
         'parameters_of_dynamic_model' : parameters_of_dynamic_model, 
-        'opt_t' : opt_t, 
+        'penality_parameter' : penality_parameter, 
         'opt_c_eq' : opt_c_eq, 
         'i' : i, 
         'verification_state' : verification_state_init, 
         'tol_inner' : tol_inner, 
-        't_final' : solver_settings['t_final'],
+        'final_penality_parameter' : solver_settings['final_penality_parameter'],
     }
 
     loop_par = lax.while_loop( loop_cond, loop_body, loop_par ) # loop
 
     n_iter = loop_par['i']
 
-    return loop_par['variables'], loop_par['opt_t'], loop_par['opt_c_eq'], n_iter, loop_par['verification_state']
+    return loop_par['variables'], loop_par['penality_parameter'], loop_par['opt_c_eq'], n_iter, loop_par['verification_state']
 
 def _solve(
     variables, parameters_of_dynamic_model, solver_settings, 
@@ -428,17 +428,17 @@ def _solve(
         execute the solution finding process
     """
 
-    opt_t    = solver_settings['opt_t_init']
+    penality_parameter    = solver_settings['penality_parameter_init']
     opt_c_eq = solver_settings['c_eq_init']
     i = 0
     verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_) )
 
     # iterations that are performed using float32 datatypes
     if max_float32_iterations > 0:
-        variables, opt_t, opt_c_eq, n_iter_f32, verification_state = _run_outer_loop( 
+        variables, penality_parameter, opt_c_eq, n_iter_f32, verification_state = _run_outer_loop( 
             i, 
             variables, parameters_of_dynamic_model, 
-            jnp.array(opt_t, dtype=jnp.float32),
+            jnp.array(penality_parameter, dtype=jnp.float32),
             jnp.array(opt_c_eq, dtype=jnp.float32),
             verification_state, 
             solver_settings,
@@ -455,10 +455,10 @@ def _solve(
 
     # iterations that are performed using float64 datatypes
     if enable_float64:
-        variables, opt_t, opt_c_eq, n_iter_f64, verification_state = _run_outer_loop( 
+        variables, penality_parameter, opt_c_eq, n_iter_f64, verification_state = _run_outer_loop( 
             i, 
             variables, parameters_of_dynamic_model, 
-            jnp.array(opt_t, dtype=jnp.float64),
+            jnp.array(penality_parameter, dtype=jnp.float64),
             jnp.array(opt_c_eq, dtype=jnp.float64),
             verification_state, 
             solver_settings,            
@@ -507,10 +507,10 @@ def get_default_solver_settings():
         'max_iter_boundary_method' : 40,
         'max_iter_inner'           : 5000,
         'c_eq_init'                : 100.0,
-        'opt_t_init'               : 0.5, 
+        'penality_parameter_init'  : 0.5, 
         'lam'                      : 1.6,    
         'eq_tol'                   : 0.0001,
-        't_final'                  : 100.0,
+        'final_penality_parameter'   : 100.0,
         'tol_inner'                : 0.0001,
     }
     
@@ -541,9 +541,12 @@ def optimize_trajectory(
     verbose = True,
 ):
     """
-        Find the optimal control sequence for a given dynamic system, cost function and constraints
+        Find the optimal control sequence for a given dynamic system, cost function, and constraints
 
-        The penality method is used to implement inequality constraints.
+        The penality method is used to implement inequality constraints. Herein using an inner loop
+        a standard solver iteratively solves an unconstrained optimization problem. In an outer loop
+        the equality and inequality constraints are implemented. Herein, the penality parameter t 
+        is increased for each outer iteration to tighten the boundary constraints.
         
         Args:
         
@@ -622,17 +625,17 @@ def optimize_trajectory(
             c_eq_init: float
                 xxx
                 
-            opt_t_init: float
-                xxx
+            penality_parameter_init: float
+                Initial penality parameter t of the penality method
                 
             lam: float
-                xxx
+                factor with which the penality parameter is increased in each iteration
                         
             eq_tol: float
                 tolerance to maximal error of the equality constraints (maximal absolute error)
                 
-            t_final: float
-                XXXX
+            final_penality_parameter: float
+                maximum penality parameter t to apply.
                 
             tol_inner: float
                 tolerance passed to the inner solver
@@ -700,7 +703,7 @@ def optimize_trajectory(
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
         _verify_step, 
-        feasibility_metric_fn=feasibility_metric_, t_final=solver_settings['t_final'], eq_tol=solver_settings['eq_tol'], verbose=verbose
+        feasibility_metric_fn=feasibility_metric_, t_final=solver_settings['final_penality_parameter'], eq_tol=solver_settings['eq_tol'], verbose=verbose
     )
     
     # trace vars
