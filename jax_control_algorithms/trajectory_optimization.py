@@ -115,13 +115,13 @@ def _evaluate_cost(f, cost, running_cost, X, U, K, parameters):
 
     assert callable(cost) or callable(running_cost), 'no cost function was given'
  
-    cost = cost(X, U, K, parameters) if callable(cost) else jnp.array(0.0)
-    assert cost.shape == (), 'return value of the cost function must be a scalar'
-
-    running_cost = jnp.mean( # TODO: remove mean()
-        _vectorize_running_cost(running_cost)(X, U, K, parameters) if callable(running_cost) else 0
+    zero = jnp.array(0.0, dtype=jnp.float32)
+    cost = cost(X, U, K, parameters) if callable(cost) else zero
+    running_cost = jnp.sum(
+        _vectorize_running_cost(running_cost)(X, U, K, parameters) if callable(running_cost) else zero
     )
-    assert running_cost.shape == (), 'return value of the running_cost function must be a scalar'
+
+    assert cost.shape == (), 'return value of the cost function must be a scalar'
 
     return cost + running_cost
 
