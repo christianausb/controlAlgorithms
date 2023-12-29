@@ -115,11 +115,13 @@ def _evaluate_cost(f, cost, running_cost, X, U, K, parameters):
 
     assert callable(cost) or callable(running_cost), 'no cost function was given'
  
-    cost = cost(X, U, K, parameters) if callable(cost) else 0
+    cost = cost(X, U, K, parameters) if callable(cost) else jnp.array(0.0)
+    assert cost.shape == (), 'return value of the cost function must be a scalar'
 
     running_cost = jnp.mean( # TODO: remove mean()
         _vectorize_running_cost(running_cost)(X, U, K, parameters) if callable(running_cost) else 0
     )
+    assert running_cost.shape == (), 'return value of the running_cost function must be a scalar'
 
     return cost + running_cost
 
@@ -577,7 +579,7 @@ def optimize_trajectory(
                 
             inequality_constraints: 
                 a function to evaluate the inequality constraints and prototype 
-                c_neq = inequality_constraints(x, u, k, parameters)
+                c_neq = inequality_constraints(X, U, K, parameters)
                 
                 A fulfilled constraint is indicated by a the value c_neq[] >= 0.
 
@@ -734,7 +736,7 @@ def optimize_trajectory(
     if g is not None:
         g_ = jax.vmap(g, in_axes=(0, 0, 0, None))
         system_outputs = g_(X_opt, U_opt, K, parameters)
-        
+    
     # collect results
     res = {
         'is_converged'        : is_converged,
