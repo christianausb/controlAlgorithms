@@ -7,10 +7,29 @@ import jaxopt
 from functools import partial
 from inspect import signature
 
-import math
 from jax_control_algorithms.common import *
 from jax_control_algorithms.jax_helper import *
 import time
+
+from dataclasses import dataclass
+from typing import Callable
+
+@dataclass(frozen=True)
+class Functions:
+    f: Callable
+    initial_guess: Callable
+    g: Callable = None
+    terminal_constraints: Callable = None
+    inequality_constraints: Callable = None
+    cost: Callable = None
+    running_cost: Callable = None
+    transform_parameters: Callable = None
+
+@dataclass(frozen=True)
+class ProblemDefinition:
+    functions: Functions
+    x0: jnp.ndarray
+    parameters: any = None
 
 
 def constraint_geq(x, v):
@@ -82,7 +101,7 @@ def _eq_constraint(f, terminal_constraints, X_opt_var, U_opt_var, K, x0, paramet
         x_terminal = X_opt_var[-1]
         
         
-        number_parameters_to_terminal_fn =len( signature( terminal_constraints ).parameters )
+        number_parameters_to_terminal_fn =len( signature( terminal_constraints ).parameters )  # TODO: This can be removed
         if number_parameters_to_terminal_fn == 2:
             # the constraint function implements the power parameter
             
@@ -518,26 +537,18 @@ def get_default_solver_settings():
     
     return solver_settings
 
-@partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14))
+@partial(jit, static_argnums=(0,  4, 5, 6, 7))
 def optimize_trajectory(
     # static
-    f, 
-    g,
-    terminal_constraints,
-    inequality_constraints,
-    cost,
-    running_cost,
-    initial_guess,   # 6
-    transform_parameters, # 7
+    functions : Functions, # 0
     
     # dynamic
-    x0,              # 8
-    parameters,      # 9
-    
-    solver_settings, # 10
+    x0,              # 1
+    parameters,      # 2
+    solver_settings, # 3
 
     # static
-    enable_float64 = True, # 11
+    enable_float64 = True, # 4
     max_float32_iterations = 0,
     max_trace_entries = 100,
     verbose = True,
@@ -665,15 +676,16 @@ def optimize_trajectory(
     """
 
     if verbose:
-        print('compiling optimizer')
+        print('compiling optimizer...')
 
     #
-    if callable(transform_parameters):
-        parameters = transform_parameters(parameters)
+    if callable(functions.transform_parameters):
+        parameters = functions.transform_parameters(parameters)
 
-    if callable(initial_guess):
-        initial_guess = initial_guess(x0, parameters)
+    assert callable(functions.f), 'a state transition function f must be provided'
+    assert callable(functions.initial_guess), 'a function initial_guess must be provided that computes an initial guess for the solution'
 
+    initial_guess = functions.initial_guess(x0, parameters)
     X_guess, U_guess = initial_guess['X_guess'], initial_guess['U_guess']
     
     # verify types and shapes
@@ -694,9 +706,9 @@ def optimize_trajectory(
     K = jnp.arange(n_steps)
 
     # pack parameters and variables
-    parameters_of_dynamic_model        = (K, parameters, x0, )
-    static_parameters = (f, terminal_constraints, inequality_constraints, cost, running_cost)
-    variables         = (X_guess, U_guess)
+    parameters_of_dynamic_model  = (K, parameters, x0, )
+    static_parameters            = (functions.f, functions.terminal_constraints, functions.inequality_constraints, functions.cost, functions.running_cost)
+    variables                    = (X_guess, U_guess)
 
     # pass static parameters into objective function
     objective_          = partial(_objective_penality_method,          static_parameters=static_parameters)
@@ -728,14 +740,14 @@ def optimize_trajectory(
     X_opt, U_opt = variables_star
     
     # evaluate the constraint functions one last time to return the residuals 
-    c_eq   = _eq_constraint(f, terminal_constraints, X_opt, U_opt, K, x0, parameters, 0)
-    c_ineq = inequality_constraints(X_opt, U_opt, K, parameters)
+    c_eq   = _eq_constraint(functions.f, functions.terminal_constraints, X_opt, U_opt, K, x0, parameters, 0)
+    c_ineq = functions.inequality_constraints(X_opt, U_opt, K, parameters)
     
     # compute systems outputs for the optimized trajectory
     system_outputs = None
-    if g is not None:
-        g_ = jax.vmap(g, in_axes=(0, 0, 0, None))
-        system_outputs = g_(X_opt, U_opt, K, parameters)
+    if functions.g is not None:
+        g_vectorized = jax.vmap(functions.g, in_axes=(0, 0, 0, None))
+        system_outputs = g_vectorized(X_opt, U_opt, K, parameters)
     
     # collect results
     res = {
@@ -754,24 +766,15 @@ class Solver:
     """
         High-level interface to the solver
     """
-    def __init__(self, problem_def_fn, use_continuation=False):
+    def __init__(self, problem_def_fn):
         self.problem_def_fn = problem_def_fn
         
         # get problem definition
         self.problem_definition = problem_def_fn()
-        assert type(self.problem_definition) is dict
+        assert type(self.problem_definition) is ProblemDefinition
 
         self.solver_settings = get_default_solver_settings()
-        
-        initial_guess = self.problem_definition['initial_guess'](
-            self.problem_definition['x0'], self.problem_definition['parameters']
-        )
-
-        # derive the number of sampling instants from the initial guess
-        self.n_steps = initial_guess['X_guess'].shape[0]
-        
-        self.use_continuation = use_continuation
-
+                
         self.enable_float64 = True
         self.max_float32_iterations = 0
         self.verbose = True
@@ -784,18 +787,12 @@ class Solver:
         
     def run(self):
         start_time = time.time()
-        solver_return = optimize_trajectory(
-            self.problem_definition['f'], 
-            self.problem_definition['g'],
-            self.problem_definition['terminal_constraints'],
-            self.problem_definition['inequality_constraints'],
-            self.problem_definition.get('cost'),
-            self.problem_definition.get('running_cost'),
-            self.problem_definition['initial_guess'],
-            self.problem_definition.get('transform_parameters'), 
 
-            self.problem_definition['x0'],
-            self.problem_definition['parameters'],
+        solver_return = optimize_trajectory(
+
+            self.problem_definition.functions,
+            self.problem_definition.x0,
+            self.problem_definition.parameters,
 
             self.solver_settings,
 

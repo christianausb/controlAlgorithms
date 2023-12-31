@@ -1,5 +1,3 @@
-import math
-#import matplotlib.pyplot as plt 
 import IPython
 import ipywidgets as widgets
 from functools import partial
@@ -15,7 +13,7 @@ def solve_and_plot(solver, plot_fn):
     
     with plot_output:
         IPython.display.clear_output(wait=True)  # Clear previous plot
-        plot_fn(X_opt, U_opt, system_outputs, solver.problem_definition['parameters'])
+        plot_fn(X_opt, U_opt, system_outputs, solver.problem_definition.parameters)
 
     return plot_output
 
@@ -44,7 +42,7 @@ def manual_investigate(solver, sliders, set_parameter_fn, plot_fn):
         with plot_output:
             IPython.display.clear_output(wait=True)  # Clear previous plot
 
-            plot_fn(X_opt, U_opt, system_outputs, solver.problem_definition['parameters'])
+            plot_fn(X_opt, U_opt, system_outputs, solver.problem_definition.parameters)
 
 
     ui = widgets.GridBox(list( sliders.values() ), layout=widgets.Layout(grid_template_columns="repeat(3, 300px)"))
