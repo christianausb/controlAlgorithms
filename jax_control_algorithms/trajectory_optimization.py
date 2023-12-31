@@ -25,7 +25,7 @@ class Functions:
     running_cost: Callable = None
     transform_parameters: Callable = None
 
-@dataclass(frozen=True)
+@dataclass()
 class ProblemDefinition:
     functions: Functions
     x0: jnp.ndarray
