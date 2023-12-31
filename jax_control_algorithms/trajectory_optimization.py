@@ -31,6 +31,29 @@ class ProblemDefinition:
     x0: jnp.ndarray
     parameters: any = None
 
+    def run(self, x0 = None, parameters = None, verbose : bool = False):
+        solver_return = optimize_trajectory(
+            self.functions,
+            self.x0 if x0 is None else x0,
+            self.parameters if parameters is None else parameters,
+
+            get_default_solver_settings(),
+
+            enable_float64           = True,
+            max_float32_iterations   = 0,
+            max_trace_entries        = 100,
+            verbose                  = verbose,
+        )
+        
+        return solver_return
+
+@dataclass
+class SolverReturn:
+    is_converged : bool
+    n_iter: jnp.ndarray    
+    c_eq: jnp.ndarray
+    c_ineq: jnp.ndarray
+    trace: tuple    
 
 def constraint_geq(x, v):
     """
@@ -531,7 +554,7 @@ def get_default_solver_settings():
         'penality_parameter_init'  : 0.5, 
         'lam'                      : 1.6,    
         'eq_tol'                   : 0.0001,
-        'final_penality_parameter'   : 100.0,
+        'final_penality_parameter' : 100.0,
         'tol_inner'                : 0.0001,
     }
     
@@ -834,3 +857,4 @@ def unpack_res(res):
     }
     
     return is_converged, c_eq, c_ineq, traces, n_iter
+
