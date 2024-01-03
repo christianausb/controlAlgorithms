@@ -33,3 +33,7 @@ classifiers = [
 
 [project.urls]
 "Homepage" = "https://github.com/christianausb/controlAlgorithms"
+
+[tool.yapf]
+COLUMN_LIMIT = 130
+DEDENT_CLOSING_BRACKETS = true
