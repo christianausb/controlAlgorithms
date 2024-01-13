@@ -613,13 +613,14 @@ def optimize_trajectory(
         
         Args:
         
-            -- callback functions that describe the problem to solve --
-            
+        functions : Functions
+            -- a collection of callback functions that describe the problem to solve --
+        
             f: 
                 the discrete-time system function with the prototype x_next = f(x, u, k, parameters)
                 - x: (n_states, )     the state vector
                 - u: (n_inputs, )     the system input(s)
-                - k: scalar           the sampling index
+                - k: scalar           the sampling index, starts at 0
                 - parameters: (JAX-pytree) the parameters parameters as passed to optimize_trajectory
             g: 
                 the optional output function g(x, u, k, parameters)
@@ -652,44 +653,39 @@ def optimize_trajectory(
 
                 The transformed parameters are then used for finding the solution.            
                 
-            -- dynamic parameters (jax values) --
-                
-            x0:
-                a vector containing the initial state of the system described by f
-            
             initial_guess:
-                a dictionary holding an initial guess for a solution that contains the following fields
+                A function that computes an initial guess for a solution with the prototype
 
-                    X_guess: (n_steps, n_states)
-                        an initial guess for a solution to the optimal state trajectory
-                        
-                    U_guess: (n_steps, n_inputs)
-                        an initial guess for a solution to the optimal sequence of control variables
+                guess = initial_guess(x0, parameters)
 
-                or a callable function the returns such a dictionary. 
-            
-            parameters: (JAX-pytree)
-                parameters to the system model that are forwarded to f, g, running_cost
-                        
-            -- static parameters (no jax-arrays or pytrees) --
-            
-            max_iter_boundary_method: int
-                The maximum number of iterations to apply the boundary method.
+                Herein, guess is a dict with the guessed solutions for X and U the fields as follows
                 
+                guess = { 'X_guess' : X_guess, 'U_guess' : U_guess }
+
+            
+        -- dynamic parameters (jax values) --
+            
+        x0:
+            a vector containing the initial state of the system described by the function f
+        
+        parameters: (JAX-pytree)
+            parameters to the system model that are passed to f, g, running_cost
+
+        solver_settings : dict 
+            
+            Parameters for the solver in form of a dictionary.
+            Default values: default settings are returned by the function get_default_solver_settings()
+                    
+            Possible fields are:
+
+            max_iter_boundary_method: int
+                The maximum number of iterations to apply the boundary method (outer solver loop)
+
             max_iter_inner: int
                 xxx
-                
-            verbose: bool
-                If true print some information on the solution process
 
-            
-            -- solver settings (can be jax datatypes) --
-            
             c_eq_init: float
                 xxx
-                
-            penality_parameter_trace: float
-                xxx 
                 
             lam: float
                 factor with which the penality parameter is increased in each iteration
@@ -697,19 +693,30 @@ def optimize_trajectory(
             eq_tol: float
                 tolerance to maximal error of the equality constraints (maximal absolute error)
                                 
+            penality_parameter_trace: float
+                A list of penality parameters to be successively applied in the iterations
+                of the outer solver loop.
+
             tol_inner: float
                 tolerance passed to the inner solver
 
-            enable_float64: bool
-                use 64-bit floating point if true enabling better precision (default = True)
 
-            max_float32_iterations: int
-                apply at max max_float32_iterations number of iterations using 32-bit floating
-                point precision enabling faster computation (default = 0)
 
-            max_trace_entries
-                The number of elements in the tracing memory 
+        -- Other static parameters (these are static values in jax jit-compilation) are --
+        enable_float64: bool
+            use 64-bit floating point if true enabling better precision (default = True)
+
+        max_float32_iterations: int
+            apply at max max_float32_iterations number of iterations using 32-bit floating
+            point precision enabling faster computation (default = 0)            
+
+        max_trace_entries
+            The number of elements in the tracing memory 
             
+        verbose: bool
+            If true print some information on the solution process
+
+
             
         Returns: X_opt, U_opt, system_outputs, res
             X_opt: the optimized state trajectory
@@ -719,7 +726,6 @@ def optimize_trajectory(
                 The return value of the function g evaluated for X_opt, U_opt
             
             res: solver-internal information that can be unpacked with unpack_res()
-            
     """
 
     if verbose:
@@ -775,11 +781,7 @@ def optimize_trajectory(
 
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
-        _verify_step,
-        feasibility_metric_fn=feasibility_metric_,
-    #        t_final=solver_settings['final_penality_parameter'],
-        eq_tol=solver_settings['eq_tol'],
-        verbose=verbose
+        _verify_step, feasibility_metric_fn=feasibility_metric_, eq_tol=solver_settings['eq_tol'], verbose=verbose
     )
 
     # trace vars
