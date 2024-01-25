@@ -3,6 +3,14 @@ Algorithms at the boundary of control and machine learning
 
 ![image](https://user-images.githubusercontent.com/4620523/236238763-343d0862-9265-464a-9208-35ea90b268fd.png)
 
+# Installation
+
+    pip install jax-control-algorithms
+
+Local development install - clone repository and run
+
+    pip install -e .
+
 # Contents
 
 ## System identification
