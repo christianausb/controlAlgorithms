@@ -18,7 +18,7 @@ from typing import Callable
 @dataclass(frozen=True)
 class Functions:
     f: Callable
-    initial_guess: Callable
+    initial_guess: Callable = None
     g: Callable = None
     terminal_constraints: Callable = None
     inequality_constraints: Callable = None
@@ -33,12 +33,12 @@ class ProblemDefinition:
     x0: jnp.ndarray
     parameters: any = None
 
-    def run(self, x0=None, parameters=None, verbose: bool = False):
+    def run(self, x0=None, parameters=None, verbose: bool = False, solver_settings = None):
         solver_return = optimize_trajectory(
             self.functions,
             self.x0 if x0 is None else x0,
             self.parameters if parameters is None else parameters,
-            get_default_solver_settings(),
+            get_default_solver_settings() if solver_settings is None else solver_settings,
             enable_float64=True,
             max_float32_iterations=0,
             max_trace_entries=100,
@@ -586,6 +586,51 @@ def get_default_solver_settings():
 
     return solver_settings
 
+def _transform_parameters(functions, parameters):
+
+    #
+    if callable(functions.transform_parameters):
+        parameters = functions.transform_parameters(parameters)
+
+    return parameters
+
+def _build_sampling_index_vector(n_steps):
+    K = jnp.arange(n_steps)
+    return K
+
+
+def _compute_system_outputs(g, X, U_opt, K, parameters):
+
+    if X.shape[0] == U_opt.shape[0] + 1:
+        # cut the latest state vector from which the output can not be computed as no control command u is available here
+        _X = X[:-1] 
+    elif X.shape[0] == U_opt.shape[0]:
+        _X = X
+    else:
+        raise BaseException('invalid number of sampling instances in X and U')
+
+    system_outputs = None
+    if g is not None:
+        g_vectorized = jax.vmap(g, in_axes=(0, 0, 0, None))
+        system_outputs = g_vectorized(_X, U_opt, K, parameters)
+
+    return system_outputs
+
+
+def compute_system_outputs(
+    functions: Functions,
+    parameters,
+    X,
+    U_opt,
+):
+
+    n_steps = U_opt.shape[0]
+
+    parameters = _transform_parameters(functions, parameters)
+    K = _build_sampling_index_vector(n_steps)
+    return _compute_system_outputs(functions.g, X, U_opt, K, parameters)
+
+
 
 @partial(jit, static_argnums=(0, 4, 5, 6, 7))
 def optimize_trajectory(
@@ -735,9 +780,7 @@ def optimize_trajectory(
     if verbose:
         print('compiling optimizer...')
 
-    #
-    if callable(functions.transform_parameters):
-        parameters = functions.transform_parameters(parameters)
+    parameters = _transform_parameters(functions, parameters)
 
     assert callable(functions.f), 'a state transition function f must be provided'
     assert callable(
@@ -765,15 +808,11 @@ def optimize_trajectory(
             n_inputs=n_inputs
         )
 
-    # index vector
-    K = jnp.arange(n_steps)
+
+    K = _build_sampling_index_vector(n_steps)
 
     # pack parameters and variables
-    parameters_of_dynamic_model = (
-        K,
-        parameters,
-        x0,
-    )
+    parameters_of_dynamic_model = (K, parameters, x0, )
     static_parameters = (
         functions.f, functions.terminal_constraints, functions.inequality_constraints, functions.cost, functions.running_cost
     )
@@ -807,11 +846,10 @@ def optimize_trajectory(
     c_eq = _eq_constraint(functions.f, functions.terminal_constraints, X_opt, U_opt, K, x0, parameters, 0)
     c_ineq = functions.inequality_constraints(X_opt, U_opt, K, parameters)
 
+    X = jnp.vstack((x0, X_opt))
+
     # compute systems outputs for the optimized trajectory
-    system_outputs = None
-    if functions.g is not None:
-        g_vectorized = jax.vmap(functions.g, in_axes=(0, 0, 0, None))
-        system_outputs = g_vectorized(X_opt, U_opt, K, parameters)
+    system_outputs = _compute_system_outputs(functions.g, X, U_opt, K, parameters)
 
     # collect results
     res = {
@@ -824,7 +862,11 @@ def optimize_trajectory(
         'trace_metric_c_ineq': trace[1],
     }
 
-    return jnp.vstack((x0, X_opt)), U_opt, system_outputs, res
+    return X, U_opt, system_outputs, res
+
+
+
+
 
 
 class Solver:
@@ -880,6 +922,8 @@ class Solver:
         return solver_return
 
 
+# https://www.geeksforgeeks.org/typing-namedtuple-improved-namedtuples/
+# https://github.com/google/jaxopt/blob/main/jaxopt/_src/base.py
 def unpack_res(res):
     """
         Unpack the results of the solver

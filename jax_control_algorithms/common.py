@@ -25,6 +25,51 @@ def rk4(f, dt):
 
     return integrator
 
+@partial(jit, static_argnums=(
+    0,
+    1,
+))
+def simulate_dscr(f, g, x0, U, dt, theta):
+    """
+        Perform a discrete-time simulation of a system
+        
+        Args:
+            f: the discrete-time system function with the prototype x_next = f(x, u, t, theta)
+            g: the output function with the prototype y = g(x, u, t, theta)
+            X0: the initial state of the system
+            U: the input signal to the applied to the system
+            dt: the sampling time (used to generate the time vector T)
+            theta: the system parameters
+        
+        Returns: T, X, Y
+            T: a time vector
+            X: the state trajectory
+            Y: the output signal of the system in response to the input
+        
+    """
+
+    # n_steps = U.shape[0]
+
+    def body(carry, u):
+        t, x_prev = carry
+
+        x = f(x_prev, u, t, theta)
+        y = g(x_prev, u, t, theta)
+
+        carry = (t + dt, x)
+
+        return carry, (t, x, y)
+
+    carry, (T, X, Y) = lax.scan(body, (0.0, x0), U)
+
+#    X = jnp.vstack((x0, X[:-1]))
+    X = jax.tree_util.tree_map(
+        lambda x0, X : jnp.vstack((x0, X[:-1])),
+        x0, X
+    )
+
+    return T, X, Y
+
 
 def vectorize_g(g):
     """ 
