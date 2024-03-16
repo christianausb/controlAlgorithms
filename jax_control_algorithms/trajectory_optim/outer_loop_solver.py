@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import jaxopt
 
 #from jax_control_algorithms.common import *
 from jax_control_algorithms.jax_helper import *
