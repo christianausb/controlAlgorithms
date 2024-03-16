@@ -8,10 +8,32 @@ import math
 
 
 def euler(f, dt):
+    """
+        apply Euler forward integrator
+
+        Args:
+            f: the transition function of the continuous system to which to apply the integration
+            dt: fixed sampling time to be used in the integration
+
+        Returns:
+            a new transition function that describes the discrete-time system resulting after application
+            of the integration method 
+    """
     return lambda x, u, t, theta: x + dt * f(x, u, t, theta)
 
 
 def rk4(f, dt):
+    """
+        apply Runge Kutta 4-th order integrator
+
+        Args:
+            f: the transition function of the continuous system to which to apply the integration
+            dt: fixed sampling time to be used in the integration
+
+        Returns:
+            a new transition function that describes the discrete-time system resulting after application
+            of the integration method 
+    """
 
     def integrator(x, u, t, theta):
 
@@ -45,10 +67,7 @@ def simulate_dscr(f, g, x0, U, dt, theta):
             T: a time vector
             X: the state trajectory
             Y: the output signal of the system in response to the input
-        
     """
-
-    # n_steps = U.shape[0]
 
     def body(carry, u):
         t, x_prev = carry
@@ -62,11 +81,7 @@ def simulate_dscr(f, g, x0, U, dt, theta):
 
     carry, (T, X, Y) = lax.scan(body, (0.0, x0), U)
 
-#    X = jnp.vstack((x0, X[:-1]))
-    X = jax.tree_util.tree_map(
-        lambda x0, X : jnp.vstack((x0, X[:-1])),
-        x0, X
-    )
+    X = jax.tree_util.tree_map(lambda x0, X: jnp.vstack((x0, X[:-1])), x0, X)
 
     return T, X, Y
 
@@ -86,6 +101,22 @@ def vectorize_f(f):
 
 
 def eval_X_next(f, X, U, T, theta):
+    """
+        Evaluate the one-step ahead prediction
+
+        For each sample of the given state trajectory X that next state is predicted 
+        by evaluating the transition function f. Herein, the respective control inputs
+        U are applied.
+
+        Args:
+            f: the discrete-time transition function of the system
+            X: the state trajectory
+            U: the trajectory of control inputs
+            T: the sequence of time instances
+            theta: parameters to the function f
+        Returns:
+            X_nest: the sequence of one-step ahead predictions
+    """
 
     # vectorize the transition function f(x, u, t, theta)
     f_vec = vectorize_f(f)

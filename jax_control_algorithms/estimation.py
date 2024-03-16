@@ -1,12 +1,8 @@
-import jax
 import jax.numpy as jnp
-from jax import jit
-from jax import lax
-from jax.experimental.ode import odeint
 import jaxopt
+from jax import jit
+from jax.experimental.ode import odeint
 from functools import partial
-
-import math
 from typing import Dict
 
 from jax_control_algorithms.common import *
@@ -49,48 +45,6 @@ def eval_R_squared(y, y_hat, weights=None):
     )
 
     return R_sq_, dB_R_sq_
-
-
-@partial(jit, static_argnums=(
-    0,
-    1,
-))
-def simulate_dscr(f, g, x0, U, dt, theta):
-    """
-        Perform a discrete-time simulation of a system
-        
-        Args:
-            f: the discrete-time system function with the prototype x_next = f(x, u, t, theta)
-            g: the output function with the prototype y = g(x, u, t, theta)
-            X0: the initial state of the system
-            U: the input signal to the applied to the system
-            dt: the sampling time (used to generate the time vector T)
-            theta: the system parameters
-        
-        Returns: T, X, Y
-            T: a time vector
-            X: the state trajectory
-            Y: the output signal of the system in response to the input
-        
-    """
-
-    n_steps = U.shape[0]
-
-    def body(carry, u):
-        t, x_prev = carry
-
-        x = f(x_prev, u, t, theta)
-        y = g(x_prev, u, t, theta)
-
-        carry = (t + dt, x)
-
-        return carry, (t, x, y)
-
-    carry, (T, X, Y) = lax.scan(body, (0.0, x0), U)
-
-    X = jnp.vstack((x0, X[:-1]))
-
-    return T, X, Y
 
 
 def _repeat_vec(w: jnp.ndarray, n: int):
@@ -309,7 +263,7 @@ def objective_identification(variables, parameters, static_parameters):
 ))
 def identify(f, g, T, U, Y, Wy, x0, theta0):
     """
-        Indentify the system parameters and the initial state of a system from I/O-data
+        Identify the system parameters and the initial state of a system from I/O-data
         
         The routine uses input-output data recorded from a system and a model 
         to estimate.
