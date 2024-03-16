@@ -603,7 +603,7 @@ def _compute_system_outputs(g, X, U_opt, K, parameters):
 
     if X.shape[0] == U_opt.shape[0] + 1:
         # cut the latest state vector from which the output can not be computed as no control command u is available here
-        _X = X[:-1] 
+        _X = X[:-1]
     elif X.shape[0] == U_opt.shape[0]:
         _X = X
     else:

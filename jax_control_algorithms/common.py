@@ -89,6 +89,11 @@ def simulate_dscr(f, g, x0, U, dt, theta):
 def vectorize_g(g):
     """ 
         vectorize the output function g(x, u, t, theta)
+
+        Allow the vectorized evaluation of the function g
+
+        Returns:
+            the vectorized function of g
     """
     return jax.vmap(g, in_axes=(0, 0, 0, None))
 
@@ -96,6 +101,11 @@ def vectorize_g(g):
 def vectorize_f(f):
     """ 
         vectorize the output function g(x, u, t, theta)
+
+        Allow the vectorized evaluation of the function f
+
+        Returns:
+            the vectorized function of f
     """
     return jax.vmap(f, in_axes=(0, 0, 0, None))
 
@@ -107,6 +117,8 @@ def eval_X_next(f, X, U, T, theta):
         For each sample of the given state trajectory X that next state is predicted 
         by evaluating the transition function f. Herein, the respective control inputs
         U are applied.
+
+            X_next( i ) = f( X(i), U(i), T(i), theta ) for all i
 
         Args:
             f: the discrete-time transition function of the system
