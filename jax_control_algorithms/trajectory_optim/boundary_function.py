@@ -5,18 +5,23 @@ def boundary_fn(x, t, y_max=10, is_continue_linear=False):
     """
         computes the boundary function of x that implements a soft-constraint 
         
-        Computes the boundary function y(x) = -(1 / t) * log(x) as part of the penality-method
+        Computes the boundary function y(x) = -(1 / t) * log(x) as part of the penalty-method
         for implementing constrained optimization.
 
         Args:
             x: a vector of elements for which to compute the boundary function
             t_opt: describes the 'sharpness' of the soft boundary
-            y_max: the value at which y is clipped.
-            is_continue_linear: 
+            y_max: the value at which y is clipped (threshold).
+            is_continue_linear: if true, apply linear continuation of the boundary function for values above the clipping threshold y_max
 
     """
 
     # assert y_max > 0
+
+    # the boundary function
+    y_boundary_function = -(1 / t) * jnp.log(x)
+
+    # clipping and continuation above threshold y_max
 
     # which x yields -1/t_opt * log(x) = y_max
     # exp(log(x)) = exp( -y_max * t_opt )
@@ -36,9 +41,7 @@ def boundary_fn(x, t, y_max=10, is_continue_linear=False):
     else:
         x_continuation = y_max
 
-    x_boundary_fn = -(1 / t) * jnp.log(x)
-
-    #
-    y = jnp.where(x < x_thr, x_continuation, x_boundary_fn)
+    # apply clipping
+    y = jnp.where(x < x_thr, x_continuation, y_boundary_function)
 
     return y

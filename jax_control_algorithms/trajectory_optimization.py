@@ -15,6 +15,7 @@ from jax_control_algorithms.trajectory_optim.dynamics_constraints import eval_dy
 from jax_control_algorithms.trajectory_optim.penality_method import *
 from jax_control_algorithms.trajectory_optim.outer_loop_solver import run_outer_loop_solver
 
+
 @dataclass(frozen=True)
 class Functions:
     f: Callable
@@ -33,7 +34,7 @@ class ProblemDefinition:
     x0: jnp.ndarray
     parameters: any = None
 
-    def run(self, x0=None, parameters=None, verbose: bool = False, solver_settings = None):
+    def run(self, x0=None, parameters=None, verbose: bool = False, solver_settings=None):
         solver_return = optimize_trajectory(
             self.functions,
             self.x0 if x0 is None else x0,
@@ -46,6 +47,7 @@ class ProblemDefinition:
         )
 
         return solver_return
+
 
 @dataclass
 class SolverReturn:
@@ -109,6 +111,7 @@ def generate_penality_parameter_trace(t_start, t_final, n_steps):
     t_trace = t_start * lam**jnp.arange(n_steps)
     return t_trace, lam
 
+
 def get_default_solver_settings():
 
     solver_settings = {
@@ -117,11 +120,12 @@ def get_default_solver_settings():
         'c_eq_init': 100.0,
         'lam': 1.6,
         'eq_tol': 0.0001,
-        'penality_parameter_trace' : generate_penality_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
+        'penality_parameter_trace': generate_penality_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
         'tol_inner': 0.0001,
     }
 
     return solver_settings
+
 
 def _transform_parameters(functions, parameters):
 
@@ -130,6 +134,7 @@ def _transform_parameters(functions, parameters):
         parameters = functions.transform_parameters(parameters)
 
     return parameters
+
 
 def _build_sampling_index_vector(n_steps):
     K = jnp.arange(n_steps)
@@ -166,7 +171,6 @@ def compute_system_outputs(
     parameters = _transform_parameters(functions, parameters)
     K = _build_sampling_index_vector(n_steps)
     return _compute_system_outputs(functions.g, X, U_opt, K, parameters)
-
 
 
 @partial(jit, static_argnums=(0, 4, 5, 6, 7))
@@ -345,11 +349,14 @@ def optimize_trajectory(
             n_inputs=n_inputs
         )
 
-
     K = _build_sampling_index_vector(n_steps)
 
     # pack parameters and variables
-    parameters_of_dynamic_model = (K, parameters, x0, )
+    parameters_of_dynamic_model = (
+        K,
+        parameters,
+        x0,
+    )
     static_parameters = (
         functions.f, functions.terminal_constraints, functions.inequality_constraints, functions.cost, functions.running_cost
     )
@@ -361,7 +368,10 @@ def optimize_trajectory(
 
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
-        verify_convergence_of_iteration, feasibility_metric_fn=feasibility_metric_, eq_tol=solver_settings['eq_tol'], verbose=verbose
+        verify_convergence_of_iteration,
+        feasibility_metric_fn=feasibility_metric_,
+        eq_tol=solver_settings['eq_tol'],
+        verbose=verbose
     )
 
     # trace vars
