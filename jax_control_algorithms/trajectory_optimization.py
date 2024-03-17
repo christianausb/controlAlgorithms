@@ -15,6 +15,11 @@ from jax_control_algorithms.trajectory_optim.dynamics_constraints import eval_dy
 from jax_control_algorithms.trajectory_optim.penality_method import *
 from jax_control_algorithms.trajectory_optim.outer_loop_solver import run_outer_loop_solver
 
+"""
+    Perform trajectory optimization of a dynamic system by finding the control sequence that 
+    minimizes a cost function under inequality constraints. Terminal constraints are optional.
+
+"""
 
 @dataclass(frozen=True)
 class Functions:
@@ -103,9 +108,12 @@ def _verify_shapes(X_guess, U_guess, x0):
 
 def generate_penalty_parameter_trace(t_start, t_final, n_steps):
     """
-    t_start: Initial penalty parameter t of the penalty method
-    t_final: maximal penalty parameter t to apply
-    n_steps: the length of the trace
+    Generate a sequence of penalty factors to be used in the optimization process
+
+    Args:
+        t_start: Initial penalty parameter t of the penalty method
+        t_final: maximal penalty parameter t to apply
+        n_steps: the length of the trace
     """
     lam = (t_final / t_start)**(1 / (n_steps - 1))
     t_trace = t_start * lam**jnp.arange(n_steps)

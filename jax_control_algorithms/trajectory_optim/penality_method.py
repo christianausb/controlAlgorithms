@@ -14,7 +14,7 @@ from jax_control_algorithms.trajectory_optim.cost_function import evaluate_cost
 
 def _objective(variables, parameters_passed_to_solver, static_parameters):
 
-    K, parameters, x0, penality_parameter, opt_c_eq = parameters_passed_to_solver
+    K, parameters, x0, penalty_parameter, opt_c_eq = parameters_passed_to_solver
     f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U = variables
 
@@ -25,14 +25,14 @@ def _objective(variables, parameters_passed_to_solver, static_parameters):
     c_eq = eval_dynamics_equality_constraints(f, terminal_constraints, X, U, K, x0, parameters).reshape(-1)
     c_ineq = inequality_constraints(X, U, K, parameters).reshape(-1)
 
-    # equality constraints using penality method
+    # equality constraints using penalty method
     J_equality_costs = opt_c_eq * jnp.mean((c_eq.reshape(-1))**2)
 
     # eval cost function of problem definition
     J_cost_function = evaluate_cost(f, cost, running_cost, X, U, K, parameters)
 
     # apply boundary costs (boundary function)
-    J_boundary_costs = jnp.mean(boundary_fn(c_ineq, penality_parameter, 11, True))
+    J_boundary_costs = jnp.mean(boundary_fn(c_ineq, penalty_parameter, 11, True))
 
     return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
 
@@ -42,7 +42,15 @@ def eval_objective_of_penalty_method(variables, parameters, static_parameters):
 
 
 def eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, static_parameters):
+    """
+        evaluate the correctness of the given solution candidate (variables)
 
+        Check how well
+            - the equality, and
+            - the inequality
+        constraints are fulfilled. For the inequality constraints it is verify if the
+        solution candidate is inside the boundaries defined by the constraints.
+    """
     K, parameters, x0 = parameters_of_dynamic_model
     f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U = variables
@@ -83,16 +91,13 @@ def _check_monotonic_convergence(i, trace):
     def false_fn(par):
         return False
 
-    is_not_monotonic = lax.cond(is_metric_check_active, true_fn, false_fn, (
-        i,
-        trace_data,
-    ))
+    is_not_monotonic = lax.cond(is_metric_check_active, true_fn, false_fn, (i, trace_data))
 
     return is_not_monotonic
 
 
 def verify_convergence_of_iteration(
-    verification_state, i, res_inner, variables, parameters_of_dynamic_model, penality_parameter, feasibility_metric_fn, eq_tol,
+    verification_state, i, res_inner, variables, parameters_of_dynamic_model, penalty_parameter, feasibility_metric_fn, eq_tol,
     verbose: bool
 ):
     """
@@ -140,9 +145,9 @@ def verify_convergence_of_iteration(
 
     if verbose:
         jax.debug.print(
-            "🔄 it={i} \t (sub iter={n_iter_inner})\tt={penality_parameter} \teq_error/eq_tol={max_eq_error} %\tinside bounds: {is_solution_inside_boundaries}",
+            "🔄 it={i} \t (sub iter={n_iter_inner})\tt={penalty_parameter} \teq_error/eq_tol={max_eq_error} %\tinside bounds: {is_solution_inside_boundaries}",
             i=i,
-            penality_parameter=my_to_int(my_round(penality_parameter, decimals=0)),
+            penalty_parameter=my_to_int(my_round(penalty_parameter, decimals=0)),
             max_eq_error=my_to_int(my_round(100 * max_eq_error / eq_tol, decimals=0)),
             n_iter_inner=n_iter_inner,
             is_solution_inside_boundaries=is_solution_inside_boundaries,
