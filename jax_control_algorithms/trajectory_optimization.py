@@ -101,7 +101,7 @@ def _verify_shapes(X_guess, U_guess, x0):
     return
 
 
-def generate_penality_parameter_trace(t_start, t_final, n_steps):
+def generate_penalty_parameter_trace(t_start, t_final, n_steps):
     """
     t_start: Initial penalty parameter t of the penalty method
     t_final: maximal penalty parameter t to apply
@@ -120,7 +120,7 @@ def get_default_solver_settings():
         'c_eq_init': 100.0,
         'lam': 1.6,
         'eq_tol': 0.0001,
-        'penality_parameter_trace': generate_penality_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
+        'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
         'tol_inner': 0.0001,
     }
 
