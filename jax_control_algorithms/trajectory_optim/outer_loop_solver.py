@@ -9,6 +9,25 @@ from jax_control_algorithms.jax_helper import *
     - An outer loop varies parameters for the penalty method, while
     - the inner solver (BGFS) is executed in each iteration of the outer loop to solve 
       the non-linear optimization problem that is defined by the penalty method
+
+
+    Task
+    ----
+
+    Minimize the cost function J(x) under the constraints
+
+        h(x) = 0
+        g(x) < 0
+
+    The problem is transformed into a non-linear optimization problem without constraints:
+
+        min_x  J(x)  +  gamma_eq * mean( h_i(x) ^ 2 )  +  gamma_neq * mean( s(g_i(x)) )
+
+    Herein, s is the boundary function that approximates an ideal boundary
+
+        s*(x < 0) = infinity
+        s*(x >= 0) = 0
+
 """
 
 
@@ -26,7 +45,7 @@ def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
 
     # get the penalty parameter
     penalty_parameter = loop_var['penalty_parameter_trace'][i]
-    is_finished_2 = i >= loop_var['penalty_parameter_trace'].shape[0] - 1
+    is_maximal_penalty_parameter_reached = i >= loop_var['penalty_parameter_trace'].shape[0] - 1
 
     #
     parameters_passed_to_inner_solver = loop_var['parameters_of_dynamic_model'] + (
@@ -40,7 +59,7 @@ def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
     variables_updated_by_inner_solver = res.params
 
     # run callback to verify the solution
-    verification_state_next, is_finished_1, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best = verification_fn(
+    verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best = verification_fn(
         loop_var['verification_state'], i, res, variables_updated_by_inner_solver, loop_var['parameters_of_dynamic_model'],
         penalty_parameter
     )
@@ -53,7 +72,7 @@ def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
     opt_c_eq_next = loop_var['opt_c_eq'] * jnp.where(is_equality_constraints_fulfilled, 1.0, loop_var['lam'])
 
     # solution found?
-    is_finished = jnp.logical_and(is_finished_1, is_finished_2)
+    is_finished = jnp.logical_and(is_solution_feasible, is_maximal_penalty_parameter_reached)
 
     return variables_next, verification_state_next, opt_c_eq_next, is_finished, is_abort, is_X_finite
 
@@ -151,7 +170,7 @@ def _run_outer_loop(
         'lam': lam,
     }
 
-    loop_var = lax.while_loop(eval_outer_loop_condition, run_outer_loop_body, loop_var) 
+    loop_var = lax.while_loop(eval_outer_loop_condition, run_outer_loop_body, loop_var)
 
     n_iter = loop_var['i']
 

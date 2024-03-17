@@ -76,7 +76,7 @@ def constraint_leq(x, v):
     return v - x
 
 
-def _get_sizes(X_guess, U_guess, x0):
+def _get_sizes(U_guess, x0):
     n_steps = U_guess.shape[0]
     n_states = x0.shape[0]
     n_inputs = U_guess.shape[1]
@@ -90,7 +90,7 @@ def _verify_shapes(X_guess, U_guess, x0):
     assert len(U_guess.shape) == 2
     assert len(x0.shape) == 1
 
-    n_steps, n_states, n_inputs = _get_sizes(X_guess, U_guess, x0)
+    n_steps, n_states, n_inputs = _get_sizes(U_guess, x0)
 
     assert U_guess.shape[0] == n_steps
     assert n_inputs >= 1
@@ -176,15 +176,15 @@ def compute_system_outputs(
 @partial(jit, static_argnums=(0, 4, 5, 6, 7))
 def optimize_trajectory(
     # static
-    functions: Functions,  # 0
+    functions: Functions,
 
     # dynamic
-    x0,  # 1
-    parameters,  # 2
-    solver_settings,  # 3
+    x0,
+    parameters,
+    solver_settings,
 
     # static
-    enable_float64=True,  # 4
+    enable_float64=True,
     max_float32_iterations=0,
     max_trace_entries=100,
     verbose=True,
@@ -335,7 +335,7 @@ def optimize_trajectory(
     _verify_shapes(X_guess, U_guess, x0)
 
     #
-    n_steps, n_states, n_inputs = _get_sizes(X_guess, U_guess, x0)
+    n_steps, n_states, n_inputs = _get_sizes(U_guess, x0)
 
     # assert type(max_iter_boundary_method) is int
     assert type(max_trace_entries) is int
@@ -352,19 +352,15 @@ def optimize_trajectory(
     K = _build_sampling_index_vector(n_steps)
 
     # pack parameters and variables
-    parameters_of_dynamic_model = (
-        K,
-        parameters,
-        x0,
-    )
+    parameters_of_dynamic_model = (K, parameters, x0)
     static_parameters = (
         functions.f, functions.terminal_constraints, functions.inequality_constraints, functions.cost, functions.running_cost
     )
     variables = (X_guess, U_guess)
 
     # pass static parameters into objective function
-    objective_ = partial(eval_objective_of_penality_method, static_parameters=static_parameters)
-    feasibility_metric_ = partial(eval_feasibility_metric_of_penality_method, static_parameters=static_parameters)
+    objective_ = partial(eval_objective_of_penalty_method, static_parameters=static_parameters)
+    feasibility_metric_ = partial(eval_feasibility_metric_of_penalty_method, static_parameters=static_parameters)
 
     # verification function (non specific to given problem to solve)
     verification_fn_ = partial(
@@ -390,7 +386,7 @@ def optimize_trajectory(
     X_opt, U_opt = variables_star
 
     # evaluate the constraint functions one last time to return the residuals
-    c_eq = eval_dynamics_equality_constraints(functions.f, functions.terminal_constraints, X_opt, U_opt, K, x0, parameters, 0)
+    c_eq = eval_dynamics_equality_constraints(functions.f, functions.terminal_constraints, X_opt, U_opt, K, x0, parameters)
     c_ineq = functions.inequality_constraints(X_opt, U_opt, K, parameters)
 
     X = jnp.vstack((x0, X_opt))

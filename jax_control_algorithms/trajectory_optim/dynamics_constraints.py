@@ -1,10 +1,10 @@
 import jax.numpy as jnp
-from inspect import signature
+#from inspect import signature
 from jax_control_algorithms.common import eval_X_next
 from typing import Callable
 
 
-def eval_dynamics_equality_constraints(f: Callable, terminal_constraints: Callable, X, U, K, x0, parameters, power):
+def eval_dynamics_equality_constraints(f: Callable, terminal_constraints: Callable, X, U, K, x0, parameters):
     """
         evaluate the algebraic constraints that form the dynamics described by the transition function
 
@@ -32,21 +32,24 @@ def eval_dynamics_equality_constraints(f: Callable, terminal_constraints: Callab
     X_next = eval_X_next(f, X[:-1], U, K, parameters)
 
     # compute c_eq(i) = x(i+1) - x_next(i) for all i
-    c_eq_running = jnp.exp2(power) * X[1:] - jnp.exp2(power) * X_next
+    #    c_eq_running = jnp.exp2(power) * X[1:] - jnp.exp2(power) * X_next
+    c_eq_running = X[1:] - X_next
 
     if terminal_constraints is not None:
         # terminal constraints are defined
         x_terminal = X[-1]
 
-        number_parameters_to_terminal_fn = len(signature(terminal_constraints).parameters)  # TODO: This can be removed
-        if number_parameters_to_terminal_fn == 2:
-            # the constraint function implements the power parameter
+        # number_parameters_to_terminal_fn = len(signature(terminal_constraints).parameters)  # TODO: This can be removed
+        # if number_parameters_to_terminal_fn == 2:
+        #     # the constraint function implements the power parameter
 
-            c_eq_terminal = jnp.exp2(power) * terminal_constraints(x_terminal, parameters)
+        #     c_eq_terminal = jnp.exp2(power) * terminal_constraints(x_terminal, parameters)
 
-        elif number_parameters_to_terminal_fn == 3:
+        # elif number_parameters_to_terminal_fn == 3:
 
-            c_eq_terminal = terminal_constraints(x_terminal, parameters, power)
+        # c_eq_terminal = terminal_constraints(x_terminal, parameters, power)
+
+        c_eq_terminal = terminal_constraints(x_terminal, parameters)
 
         # total
         c_eq = jnp.vstack((c_eq_running, c_eq_terminal))

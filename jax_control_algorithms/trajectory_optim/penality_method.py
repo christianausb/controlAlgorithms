@@ -21,11 +21,8 @@ def _objective(variables, parameters_passed_to_solver, static_parameters):
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
 
-    # scaling factor exponent
-    power = 0
-
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eval_dynamics_equality_constraints(f, terminal_constraints, X, U, K, x0, parameters, power).reshape(-1)
+    c_eq = eval_dynamics_equality_constraints(f, terminal_constraints, X, U, K, x0, parameters).reshape(-1)
     c_ineq = inequality_constraints(X, U, K, parameters).reshape(-1)
 
     # equality constraints using penality method
@@ -40,18 +37,18 @@ def _objective(variables, parameters_passed_to_solver, static_parameters):
     return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
 
 
-def eval_objective_of_penality_method(variables, parameters, static_parameters):
+def eval_objective_of_penalty_method(variables, parameters, static_parameters):
     return _objective(variables, parameters, static_parameters)[0]
 
 
-def eval_feasibility_metric_of_penality_method(variables, parameters_of_dynamic_model, static_parameters):
+def eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, static_parameters):
 
     K, parameters, x0 = parameters_of_dynamic_model
     f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U = variables
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eval_dynamics_equality_constraints(f, terminal_constraints, X, U, K, x0, parameters, 0)
+    c_eq = eval_dynamics_equality_constraints(f, terminal_constraints, X, U, K, x0, parameters)
     c_ineq = inequality_constraints(X, U, K, parameters)
 
     #
