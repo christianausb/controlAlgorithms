@@ -149,3 +149,10 @@ def _append_to_trace(traces, values_to_append):
 def get_trace_data(traces):
     trace_data = traces[1]
     return trace_data
+
+
+def tree_where(condition, x, y):
+    """
+        Returns x if condition is True else return y
+    """
+    return jax.tree_util.tree_map(lambda x, y: jnp.where(condition, x, y), x, y)

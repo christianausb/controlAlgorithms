@@ -2,10 +2,13 @@ import jax
 import jax.numpy as jnp
 import jaxopt
 
-#from jax_control_algorithms.common import *
 from jax_control_algorithms.jax_helper import *
 """
+    Implements the nested solver loops
 
+    - An outer loop varies parameters for the penalty method, while
+    - the inner solver (BGFS) is executed in each iteration of the outer loop to solve 
+      the non-linear optimization problem that is defined by the penalty method
 """
 
 
@@ -46,18 +49,18 @@ def _run_outer_loop(
     # loop:
     #
 
-    def loop_body(loop_par):
+    def run_outer_loop_body(loop_par):
 
         # loop iteration variable i
         i = loop_par['i']
 
-        # get the penality parameter
-        penality_parameter = loop_par['penality_parameter_trace'][i]
+        # get the penalty parameter
+        penalty_parameter = loop_par['penality_parameter_trace'][i]
         is_finished_2 = i >= loop_par['penality_parameter_trace'].shape[0] - 1
 
         #
         parameters_passed_to_inner_solver = loop_par['parameters_of_dynamic_model'] + (
-            penality_parameter,
+            penalty_parameter,
             loop_par['opt_c_eq'],
         )
 
@@ -66,37 +69,45 @@ def _run_outer_loop(
             fun=objective_fn, value_and_grad=False, tol=loop_par['tol_inner'], maxiter=solver_settings['max_iter_inner']
         )
         res = gd.run(loop_par['variables'], parameters=parameters_passed_to_inner_solver)
-        _variables_next = res.params
+        variables_updated_by_inner_solver = res.params
 
         # run callback to verify the solution
-        verification_state_next, is_finished_1, is_eq_converged, is_abort, is_X_finite, i_best = verification_fn(
-            loop_par['verification_state'], i, res, _variables_next, loop_par['parameters_of_dynamic_model'], penality_parameter
-        )
-
-        # c_eq-control
-        opt_c_eq_next = jnp.where(
-            is_eq_converged,
-
-            # in case of convergence of the error below the threshold there is not need to increase c_eq
-            loop_par['opt_c_eq'],
-
-            # increase c_eq
-            loop_par['opt_c_eq'] * lam,
+        verification_state_next, is_finished_1, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best = verification_fn(
+            loop_par['verification_state'], i, res, variables_updated_by_inner_solver, loop_par['parameters_of_dynamic_model'],
+            penalty_parameter
         )
 
         # use previous state of the iteration in case of abortion (when is_abort == True)
-        variables_next = (
-            jnp.where(
-                is_abort,
-                loop_par['variables'][0],
-                _variables_next[0]  #
-            ),
-            jnp.where(
-                is_abort,
-                loop_par['variables'][1],  # use previous state of the iteration in case of abortion
-                _variables_next[1]  #
-            ),
-        )
+        # variables_next = (
+        #     jnp.where(
+        #         is_abort,
+        #         loop_par['variables'][0],
+        #         variables_updated_by_inner_solver[0]  #
+        #     ),
+        #     jnp.where(
+        #         is_abort,
+        #         loop_par['variables'][1],  # use previous state of the iteration in case of abortion
+        #         variables_updated_by_inner_solver[1]  #
+        #     ),
+        # )
+
+        # update the state of the optimization variables in case the outer loop shall not be aborted
+        variables_next = tree_where(is_abort, loop_par['variables'], variables_updated_by_inner_solver)
+
+        # # c_eq-control
+        # opt_c_eq_next = jnp.where(
+        #     is_equality_constraints_fulfilled,
+
+        #     # in case of convergence of the error below the threshold there is not need to increase c_eq
+        #     loop_par['opt_c_eq'],
+
+        #     # increase c_eq
+        #     loop_par['opt_c_eq'] * lam,
+        # )
+
+        # update opt_c_eq: in case the equality constraints are not satisfies yet, increase opt_c_eq by multiplication with lam > 1
+        # otherwise leave opt_c_eq untouched.
+        opt_c_eq_next = loop_par['opt_c_eq'] * jnp.where(is_equality_constraints_fulfilled, 1.0, lam)
 
         # solution found?
         is_finished = jnp.logical_and(is_finished_1, is_finished_2)
@@ -119,7 +130,7 @@ def _run_outer_loop(
 
         return loop_par
 
-    def loop_cond(loop_par):
+    def eval_outer_loop_condition(loop_par):
         is_n_iter_not_reached = loop_par['i'] < solver_settings['max_iter_boundary_method']
 
         is_max_iter_reached_and_not_finished = jnp.logical_and(
@@ -159,7 +170,7 @@ def _run_outer_loop(
         'tol_inner': tol_inner,
     }
 
-    loop_par = lax.while_loop(loop_cond, loop_body, loop_par)  # loop
+    loop_par = lax.while_loop(eval_outer_loop_condition, run_outer_loop_body, loop_par)  # loop
 
     n_iter = loop_par['i']
 
