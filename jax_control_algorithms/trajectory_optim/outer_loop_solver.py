@@ -3,6 +3,9 @@ import jax.numpy as jnp
 import jaxopt
 
 from jax_control_algorithms.jax_helper import *
+from jax_control_algorithms.trajectory_optim.penality_method import verify_convergence_of_iteration
+from jax_control_algorithms.trajectory_optim.problem_definition import *
+
 """
     Implements the nested solver loops
 
@@ -41,7 +44,7 @@ def _print_loop_info(loop_par, is_max_iter_reached_and_not_finished, print_error
         lax.cond(jnp.logical_not(loop_par['is_X_finite']), lambda: jax.debug.print("❌ found non finite numerics"), lambda: None)
 
 
-def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
+def _iterate(i, loop_var, functions, solver_settings, objective_fn, verification_fn):
 
     # get the penalty parameter
     penalty_parameter = loop_var['penalty_parameter_trace'][i]
@@ -54,53 +57,37 @@ def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
         loop_var['opt_c_eq'],
     )
 
+
+    print(solver_settings['eq_tol'])
+
     # run inner solver
     gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=loop_var['tol_inner'], maxiter=solver_settings['max_iter_inner'])
     res = gd.run(loop_var['variables'], parameters=parameters_passed_to_inner_solver)
     variables_updated_by_inner_solver = res.params
 
-    # run callback to verify the solution
+    # run verify the solution and control the convergence of to the equality constraints
+    # (
+    #     verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best,
+    #     max_eq_error, normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next
+    # ) = verification_fn(
+    #     loop_var['verification_state'], i, n_outer_iterations_target, res, variables_updated_by_inner_solver,
+    #     loop_var['parameters_of_dynamic_model'], penalty_parameter, loop_var['opt_c_eq']
+    # )
+
     (
         verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best,
         max_eq_error, normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next
-    ) = verification_fn(
-        loop_var['verification_state'], i, n_outer_iterations_target, res, variables_updated_by_inner_solver, loop_var['parameters_of_dynamic_model'],
-        penalty_parameter, loop_var['opt_c_eq']
+    ) = verify_convergence_of_iteration(
+        loop_var['verification_state'], i, n_outer_iterations_target, res, variables_updated_by_inner_solver,
+        loop_var['parameters_of_dynamic_model'], penalty_parameter, loop_var['opt_c_eq'],
+        functions,
+        eq_tol=solver_settings['eq_tol'],
+        verbose=True
     )
+
 
     # update the state of the optimization variables in case the outer loop shall not be aborted
     variables_next = tree_where(is_abort, loop_var['variables'], variables_updated_by_inner_solver)
-
-    #
-    #
-    #
-    #
-
-    # trace, _ = verification_state_next
-
-    # def _control_gamma_eq(
-    #     gamma_eq, is_equality_constraints_fulfilled, lam, max_eq_error, normalized_equality_error_change,
-    #     normalized_equality_error_gain
-    # ):
-
-    #     _lam = lam * 1.0
-
-    #     gamma_eq_next = gamma_eq * jnp.where(is_equality_constraints_fulfilled, 1.0, _lam)
-
-    #     return gamma_eq_next
-
-    # # update opt_c_eq: in case the equality constraints are not satisfies yet, increase opt_c_eq by multiplication with lam > 1
-    # # otherwise leave opt_c_eq untouched.
-    # # opt_c_eq_next = loop_var['opt_c_eq'] * jnp.where(is_equality_constraints_fulfilled, 1.0, loop_var['lam'])
-    # opt_c_eq_next = _control_gamma_eq(
-    #     loop_var['opt_c_eq'], is_equality_constraints_fulfilled, loop_var['lam'], max_eq_error, normalized_equality_error_change,
-    #     normalized_equality_error_gain
-    # )
-
-    #
-    #
-    #
-    #
 
     # solution found?
     is_finished = jnp.logical_and(is_solution_feasible, is_maximal_penalty_parameter_reached)
@@ -109,8 +96,8 @@ def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
 
 
 def _run_outer_loop(
-    i, variables, parameters_of_dynamic_model, opt_c_eq, verification_state_init, solver_settings, objective_fn, verification_fn,
-    verbose, print_errors, target_dtype
+    i, variables, model_to_solve : ModelToSolve, opt_c_eq, verification_state_init, solver_settings, objective_fn, verification_fn, verbose,
+    print_errors, target_dtype
 ):
     """
         Execute the outer loop of the optimization process: herein in each iteration, the parameters of the
@@ -121,7 +108,7 @@ def _run_outer_loop(
     # convert dtypes to the target datatype used in the computation
     (
         variables,
-        parameters_of_dynamic_model,
+        # model_to_solve,
         penalty_parameter_trace,
         opt_c_eq,
         verification_state_init,
@@ -130,13 +117,14 @@ def _run_outer_loop(
     ) = convert_dtype(
         (
             variables,
-            parameters_of_dynamic_model,
+            # model_to_solve.parameters_of_dynamic_model, # model_to_solve, # model_to_solve.
             solver_settings['penalty_parameter_trace'],
             opt_c_eq,
             verification_state_init,
             solver_settings['lam'],
             solver_settings['tol_inner'],
-        ), target_dtype
+        ),
+        target_dtype
     )
 
     # loop:
@@ -146,7 +134,7 @@ def _run_outer_loop(
         i = loop_var['i']
 
         variables_next, verification_state_next, opt_c_eq_next, is_finished, is_abort, is_X_finite = _iterate(
-            i, loop_var, solver_settings, objective_fn, verification_fn
+            i, loop_var, model_to_solve.functions, solver_settings, objective_fn, verification_fn
         )
 
         if verbose:
@@ -187,12 +175,14 @@ def _run_outer_loop(
         return is_continue_iteration
 
     # variables that are passed amount the loop-iterations
+    parameters_of_dynamic_model = model_to_solve.parameters_of_dynamic_model
+
     loop_var = {
         'is_finished': jnp.array(False, dtype=jnp.bool_),
         'is_abort': jnp.array(False, dtype=jnp.bool_),
         'is_X_finite': jnp.array(True, dtype=jnp.bool_),
         'variables': variables,
-        'parameters_of_dynamic_model': parameters_of_dynamic_model,
+        'parameters_of_dynamic_model': model_to_solve.parameters_of_dynamic_model,
         'penalty_parameter_trace': penalty_parameter_trace,
         'opt_c_eq': opt_c_eq,
         'i': i,
@@ -209,7 +199,7 @@ def _run_outer_loop(
 
 
 def run_outer_loop_solver(
-    variables, parameters_of_dynamic_model, solver_settings, trace_init, objective_, verification_fn_, max_float32_iterations,
+    variables, model_to_solve, solver_settings, trace_init, objective_, verification_fn_, max_float32_iterations,
     enable_float64, verbose
 ):
     """
@@ -225,7 +215,7 @@ def run_outer_loop_solver(
         variables, opt_c_eq, n_iter_f32, verification_state = _run_outer_loop(
             i,
             variables,
-            parameters_of_dynamic_model,
+            model_to_solve,
             jnp.array(opt_c_eq, dtype=jnp.float32),
             verification_state,
             solver_settings,
@@ -249,7 +239,7 @@ def run_outer_loop_solver(
         variables, opt_c_eq, n_iter_f64, verification_state = _run_outer_loop(
             i,
             variables,
-            parameters_of_dynamic_model,
+            model_to_solve,
             jnp.array(opt_c_eq, dtype=jnp.float64),
             verification_state,
             solver_settings,

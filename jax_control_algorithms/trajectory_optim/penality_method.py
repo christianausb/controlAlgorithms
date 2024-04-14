@@ -7,6 +7,7 @@ from jax_control_algorithms.jax_helper import *
 from jax_control_algorithms.trajectory_optim.boundary_function import boundary_fn
 from jax_control_algorithms.trajectory_optim.dynamics_constraints import eval_dynamics_equality_constraints
 from jax_control_algorithms.trajectory_optim.cost_function import evaluate_cost
+from jax_control_algorithms.trajectory_optim.problem_definition import Functions
 """
     https://en.wikipedia.org/wiki/Penalty_method
 """
@@ -41,7 +42,7 @@ def eval_objective_of_penalty_method(variables, parameters, static_parameters):
     return _objective(variables, parameters, static_parameters)[0]
 
 
-def eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, static_parameters):
+def eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, functions : Functions):
     """
         evaluate the correctness of the given solution candidate (variables)
 
@@ -52,12 +53,12 @@ def eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_m
         solution candidate is inside the boundaries defined by the constraints.
     """
     K, parameters, x0 = parameters_of_dynamic_model
-    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
+#    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U = variables
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eval_dynamics_equality_constraints(f, terminal_constraints, X, U, K, x0, parameters)
-    c_ineq = inequality_constraints(X, U, K, parameters)
+    c_eq = eval_dynamics_equality_constraints( functions.f, functions.terminal_constraints, X, U, K, x0, parameters)
+    c_ineq = functions.inequality_constraints(X, U, K, parameters)
 
     #
     metric_c_eq = jnp.max(jnp.abs(c_eq))
@@ -135,7 +136,8 @@ def verify_convergence_of_iteration(
     parameters_of_dynamic_model,
     penalty_parameter,
     opt_c_eq,  # blub
-    feasibility_metric_fn,
+    # feasibility_metric_fn,
+    functions,
     eq_tol,
     verbose: bool
 ):
@@ -151,7 +153,9 @@ def verify_convergence_of_iteration(
     is_abort_because_of_nonfinite = jnp.logical_not(is_X_finite)
 
     # verify step
-    max_eq_error, is_solution_inside_boundaries = feasibility_metric_fn(variables, parameters_of_dynamic_model)
+
+    max_eq_error, is_solution_inside_boundaries = eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, functions)
+    #    max_eq_error, is_solution_inside_boundaries = feasibility_metric_fn(variables, parameters_of_dynamic_model)
     n_iter_inner = res_inner.state.iter_num
 
     #

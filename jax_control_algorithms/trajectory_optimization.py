@@ -14,23 +14,13 @@ from typing import Callable
 from jax_control_algorithms.trajectory_optim.dynamics_constraints import eval_dynamics_equality_constraints
 from jax_control_algorithms.trajectory_optim.penality_method import *
 from jax_control_algorithms.trajectory_optim.outer_loop_solver import run_outer_loop_solver
+from jax_control_algorithms.trajectory_optim.problem_definition import *
 
 """
     Perform trajectory optimization of a dynamic system by finding the control sequence that 
     minimizes a cost function under inequality constraints. Terminal constraints are optional.
 
 """
-
-@dataclass(frozen=True)
-class Functions:
-    f: Callable
-    initial_guess: Callable = None
-    g: Callable = None
-    terminal_constraints: Callable = None
-    inequality_constraints: Callable = None
-    cost: Callable = None
-    running_cost: Callable = None
-    transform_parameters: Callable = None
 
 
 @dataclass()
@@ -360,7 +350,10 @@ def optimize_trajectory(
     K = _build_sampling_index_vector(n_steps)
 
     # pack parameters and variables
-    parameters_of_dynamic_model = (K, parameters, x0)
+    # parameters_of_dynamic_model = (K, parameters, x0)
+
+    model_to_solve = ModelToSolve(functions=functions, parameters_of_dynamic_model=(K, parameters, x0)) # ParametersOfModelToSolve(K=K, x0=x0, parameters=parameters))
+
     static_parameters = (
         functions.f, functions.terminal_constraints, functions.inequality_constraints, functions.cost, functions.running_cost
     )
@@ -368,15 +361,16 @@ def optimize_trajectory(
 
     # pass static parameters into objective function
     objective_ = partial(eval_objective_of_penalty_method, static_parameters=static_parameters)
-    feasibility_metric_ = partial(eval_feasibility_metric_of_penalty_method, static_parameters=static_parameters)
+    # feasibility_metric_ = partial(eval_feasibility_metric_of_penalty_method, static_parameters=static_parameters)
 
     # verification function (non specific to given problem to solve)
-    verification_fn_ = partial(
-        verify_convergence_of_iteration,
-        feasibility_metric_fn=feasibility_metric_,
-        eq_tol=solver_settings['eq_tol'],
-        verbose=verbose
-    )
+    # verification_fn_ = partial(
+    #     verify_convergence_of_iteration,
+    #     feasibility_metric_fn=feasibility_metric_,
+    #     eq_tol=solver_settings['eq_tol'],
+    #     verbose=verbose
+    # )
+    verification_fn_ = None
 
     # trace vars
     trace_init = init_trace_memory(
@@ -386,8 +380,8 @@ def optimize_trajectory(
 
     # run solver
     variables_star, is_converged, n_iter, trace = run_outer_loop_solver(
-        variables, parameters_of_dynamic_model, solver_settings, trace_init, objective_, verification_fn_, max_float32_iterations,
-        enable_float64, verbose
+        variables, model_to_solve, solver_settings, trace_init, objective_, verification_fn_,
+        max_float32_iterations, enable_float64, verbose
     )
 
     # unpack results for optimized variables
