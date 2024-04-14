@@ -13,24 +13,24 @@ from jax_control_algorithms.trajectory_optim.problem_definition import Functions
 """
 
 
-def _objective(variables, parameters_passed_to_solver, static_parameters):
+def _objective(variables, parameters_passed_to_solver, functions : Functions):
 
     K, parameters, x0, penalty_parameter, opt_c_eq = parameters_passed_to_solver
-    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
+#    f, terminal_constraints, inequality_constraints, cost, running_cost = static_parameters
     X, U = variables
 
     n_steps = X.shape[0]
     assert U.shape[0] == n_steps
 
     # get equality constraint. The constraints are fulfilled of all elements of c_eq are zero
-    c_eq = eval_dynamics_equality_constraints(f, terminal_constraints, X, U, K, x0, parameters).reshape(-1)
-    c_ineq = inequality_constraints(X, U, K, parameters).reshape(-1)
+    c_eq = eval_dynamics_equality_constraints(functions.f, functions.terminal_constraints, X, U, K, x0, parameters).reshape(-1)
+    c_ineq = functions.inequality_constraints(X, U, K, parameters).reshape(-1)
 
     # equality constraints using penalty method
     J_equality_costs = opt_c_eq * jnp.mean((c_eq.reshape(-1))**2)
 
     # eval cost function of problem definition
-    J_cost_function = evaluate_cost(f, cost, running_cost, X, U, K, parameters)
+    J_cost_function = evaluate_cost(functions.f, functions.cost, functions.running_cost, X, U, K, parameters)
 
     # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(boundary_fn(c_ineq, penalty_parameter, 11, True))
@@ -38,8 +38,8 @@ def _objective(variables, parameters_passed_to_solver, static_parameters):
     return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
 
 
-def eval_objective_of_penalty_method(variables, parameters, static_parameters):
-    return _objective(variables, parameters, static_parameters)[0]
+def eval_objective_of_penalty_method(variables, parameters, functions : Functions):
+    return _objective(variables, parameters, functions)[0]
 
 
 def eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, functions : Functions):
