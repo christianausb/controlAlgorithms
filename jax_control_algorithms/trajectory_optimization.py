@@ -350,27 +350,8 @@ def optimize_trajectory(
     K = _build_sampling_index_vector(n_steps)
 
     # pack parameters and variables
-    # parameters_of_dynamic_model = (K, parameters, x0)
-
     model_to_solve = ModelToSolve(functions=functions, parameters_of_dynamic_model=ParametersOfModelToSolve(K=K, x0=x0, parameters=parameters))
-
-    static_parameters = (
-        functions.f, functions.terminal_constraints, functions.inequality_constraints, functions.cost, functions.running_cost
-    )
     variables = (X_guess, U_guess)
-
-    # pass static parameters into objective function
-    objective_ = None #partial(eval_objective_of_penalty_method, static_parameters=static_parameters)
-    # feasibility_metric_ = partial(eval_feasibility_metric_of_penalty_method, static_parameters=static_parameters)
-
-    # verification function (non specific to given problem to solve)
-    # verification_fn_ = partial(
-    #     verify_convergence_of_iteration,
-    #     feasibility_metric_fn=feasibility_metric_,
-    #     eq_tol=solver_settings['eq_tol'],
-    #     verbose=verbose
-    # )
-    verification_fn_ = None
 
     # trace vars
     trace_init = init_trace_memory(
@@ -380,7 +361,7 @@ def optimize_trajectory(
 
     # run solver
     variables_star, is_converged, n_iter, trace = run_outer_loop_solver(
-        variables, model_to_solve, solver_settings, trace_init, verification_fn_,
+        variables, model_to_solve, solver_settings, trace_init,
         max_float32_iterations, enable_float64, verbose
     )
 

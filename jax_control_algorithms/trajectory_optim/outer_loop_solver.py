@@ -46,7 +46,7 @@ def _print_loop_info(loop_par, is_max_iter_reached_and_not_finished, print_error
         lax.cond(jnp.logical_not(loop_par['is_X_finite']), lambda: jax.debug.print("❌ found non finite numerics"), lambda: None)
 
 
-def _iterate(i, loop_var, functions, solver_settings, verification_fn):
+def _iterate(i, loop_var, functions, solver_settings):
 
     # get the penalty parameter
     penalty_parameter = loop_var['penalty_parameter_trace'][i]
@@ -95,7 +95,7 @@ def _iterate(i, loop_var, functions, solver_settings, verification_fn):
 
 
 def _run_outer_loop(
-    i, variables, model_to_solve : ModelToSolve, opt_c_eq, verification_state_init, solver_settings, verification_fn, verbose,
+    i, variables, model_to_solve : ModelToSolve, opt_c_eq, verification_state_init, solver_settings, verbose,
     print_errors, target_dtype
 ):
     """
@@ -133,7 +133,7 @@ def _run_outer_loop(
         i = loop_var['i']
 
         variables_next, verification_state_next, opt_c_eq_next, is_finished, is_abort, is_X_finite = _iterate(
-            i, loop_var, model_to_solve.functions, solver_settings, verification_fn
+            i, loop_var, model_to_solve.functions, solver_settings
         )
 
         if verbose:
@@ -196,7 +196,7 @@ def _run_outer_loop(
 
 
 def run_outer_loop_solver(
-    variables, model_to_solve, solver_settings, trace_init, verification_fn_, max_float32_iterations,
+    variables, model_to_solve, solver_settings, trace_init, max_float32_iterations,
     enable_float64, verbose
 ):
     """
@@ -216,7 +216,6 @@ def run_outer_loop_solver(
             jnp.array(opt_c_eq, dtype=jnp.float32),
             verification_state,
             solver_settings,
-            verification_fn_,
             verbose,
             True if verbose else False,  # show_errors
             target_dtype=jnp.float32
@@ -239,7 +238,6 @@ def run_outer_loop_solver(
             jnp.array(opt_c_eq, dtype=jnp.float64),
             verification_state,
             solver_settings,
-            verification_fn_,
             verbose,
             True if verbose else False,  # show_errors
             target_dtype=jnp.float64
