@@ -96,8 +96,47 @@ def _check_monotonic_convergence(i, trace):
     return is_not_monotonic
 
 
+def _eval_eq_constraints_improvement(i, trace):
+    """
+        return the change of the error for the equality constraints between the iteration i and i-1
+    """
+
+    trace_data = get_trace_data(trace)
+
+    def true_fn(par):
+        i, trace = par
+
+        normalized_equality_error_before = trace[0][i - 1]
+        normalized_equality_error_after = trace[0][i]
+
+        normalized_equality_error_change = normalized_equality_error_before - normalized_equality_error_after
+        normalized_equality_error_gain = normalized_equality_error_before / normalized_equality_error_after
+
+        if False:
+            jax.debug.print(
+                "normalized_equality_error_before={normalized_equality_error_before} normalized_equality_error_after={normalized_equality_error_after}",
+                normalized_equality_error_before=normalized_equality_error_before, normalized_equality_error_after=normalized_equality_error_after
+            )
+
+        return normalized_equality_error_change, normalized_equality_error_gain
+
+    def false_fn(par):
+        return 0.0, 0.0
+
+    return lax.cond(i >= 1, true_fn, false_fn, (i, trace_data))
+
+
 def verify_convergence_of_iteration(
-    verification_state, i, res_inner, variables, parameters_of_dynamic_model, penalty_parameter, feasibility_metric_fn, eq_tol,
+    verification_state,
+    i,
+    n_outer_iterations_target,
+    res_inner,
+    variables,
+    parameters_of_dynamic_model,
+    penalty_parameter,
+    opt_c_eq,  # blub
+    feasibility_metric_fn,
+    eq_tol,
     verbose: bool
 ):
     """
@@ -115,40 +154,108 @@ def verify_convergence_of_iteration(
     max_eq_error, is_solution_inside_boundaries = feasibility_metric_fn(variables, parameters_of_dynamic_model)
     n_iter_inner = res_inner.state.iter_num
 
-    # verify metrics and check for convergence
-    is_eq_converged = max_eq_error < eq_tol
+    #
+    normalized_equality_error = max_eq_error / eq_tol
 
-    is_converged = jnp.logical_and(
-        is_eq_converged,
-        is_solution_inside_boundaries,
-    )
+    # verify metrics and check for convergence
+    is_equality_constraints_fulfilled = normalized_equality_error < 1.0  # max_eq_error < eq_tol
+
+    is_converged = jnp.logical_and(is_equality_constraints_fulfilled, is_solution_inside_boundaries)
 
     # trace
     X, U = variables
     trace_next, is_trace_appended = append_to_trace(
-        trace, (max_eq_error, 1.0 * is_solution_inside_boundaries, n_iter_inner, X, U)
+        trace, (normalized_equality_error, 1.0 * is_solution_inside_boundaries, n_iter_inner, X, U)
     )
-    verification_state_next = (
-        trace_next,
-        is_converged,
-    )
+    verification_state_next = (trace_next, is_converged)
+
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
 
     # check for monotonic convergence of the equality constraints
+    #
+    #
+    # NOTE: it is ok if it is not monotonic, the case of step back, the control needs to increase the parameter for the
+    # equality constraints
+    #
     is_not_monotonic = jnp.logical_and(
         _check_monotonic_convergence(i, trace_next),
         jnp.logical_not(is_converged),
     )
 
-    i_best = None
+    # measure the improvement of eq-constraints fulfillment
+    # ideally, this metric always decreases
+    normalized_equality_error_change, normalized_equality_error_gain = _eval_eq_constraints_improvement(i, trace_next)
 
-    is_abort = jnp.logical_or(is_abort_because_of_nonfinite, is_not_monotonic)
+    # is_abort = jnp.logical_or(is_abort_because_of_nonfinite, is_not_monotonic)
+    is_abort = is_abort_because_of_nonfinite
+
+    #
+    # control
+
+    def _control_gamma_eq(
+        i,  # loop index
+        gamma_eq,
+        is_equality_constraints_fulfilled,
+        normalized_equality_error,
+        normalized_equality_error_change,
+        normalized_equality_error_gain,
+        n_outer_iterations_target
+    ):
+        # normalized_equality_error --> 1 in n_outer_iterations_target
+        #
+        # normalized_equality_error / lambda ^ n_outer_iterations_target < 1.0
+        # normalized_equality_error = lambda ^ n_outer_iterations_target
+
+        n_iter_left = n_outer_iterations_target - i
+        lam = jnp.where(n_iter_left > 3, normalized_equality_error**(1 / n_iter_left), 1.7)
+
+        jax.debug.print(
+            "lam={lam} normalized_equality_error={normalized_equality_error} n_outer_iterations_target={n_outer_iterations_target}",
+            lam=lam,
+            normalized_equality_error=normalized_equality_error,
+            n_outer_iterations_target=n_outer_iterations_target
+        )
+
+        #        lam = 1.6
+
+        _lam = lam * 1.0
+
+        gamma_eq_next = gamma_eq * jnp.where(is_equality_constraints_fulfilled, 1.0, _lam)
+
+        return gamma_eq_next
+
+    # update opt_c_eq: in case the equality constraints are not satisfies yet, increase opt_c_eq by multiplication with lam > 1
+    # otherwise leave opt_c_eq untouched.
+    # opt_c_eq_next = loop_var['opt_c_eq'] * jnp.where(is_equality_constraints_fulfilled, 1.0, loop_var['lam'])
+    opt_c_eq_next = _control_gamma_eq(
+        i, opt_c_eq, is_equality_constraints_fulfilled, normalized_equality_error, normalized_equality_error_change,
+        normalized_equality_error_gain, n_outer_iterations_target
+    )
+
+    #
+    #
+    #
+    #
+    #
+    #
+
+    i_best = None
 
     if verbose:
         jax.debug.print(
-            "🔄 it={i} \t (sub iter={n_iter_inner})\tt={penalty_parameter} \teq_error/eq_tol={max_eq_error} %\tinside bounds: {is_solution_inside_boundaries}",
+            "🔄 it={i} \t (sub iter={n_iter_inner})\tt={penalty_parameter} \teq_error/eq_tol={normalized_equality_error}  gain={normalized_equality_error_gain} change={normalized_equality_error_change} \tinside bounds: {is_solution_inside_boundaries}",
             i=i,
             penalty_parameter=my_to_int(my_round(penalty_parameter, decimals=0)),
-            max_eq_error=my_to_int(my_round(100 * max_eq_error / eq_tol, decimals=0)),
+            normalized_equality_error=my_to_int(my_round(100 * normalized_equality_error, decimals=0)),
+            normalized_equality_error_gain=normalized_equality_error_gain,
+            normalized_equality_error_change=normalized_equality_error_change,
             n_iter_inner=n_iter_inner,
             is_solution_inside_boundaries=is_solution_inside_boundaries,
         )
@@ -159,9 +266,12 @@ def verify_convergence_of_iteration(
                 "is_eq_converged={is_eq_converged}, is_solution_inside_boundaries={is_solution_inside_boundaries}",
                 is_abort_because_of_nonfinite=is_abort_because_of_nonfinite,
                 is_not_monotonic=is_not_monotonic,
-                is_eq_converged=is_eq_converged,
+                is_eq_converged=is_equality_constraints_fulfilled,
                 is_solution_inside_boundaries=is_solution_inside_boundaries,
             )
 
     # verification_state, is_finished, is_abort, i_best
-    return verification_state_next, is_converged, is_eq_converged, is_abort, is_X_finite, i_best
+    return (
+        verification_state_next, is_converged, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best, max_eq_error,
+        normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next
+    )

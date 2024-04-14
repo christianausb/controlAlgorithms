@@ -45,7 +45,8 @@ def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
 
     # get the penalty parameter
     penalty_parameter = loop_var['penalty_parameter_trace'][i]
-    is_maximal_penalty_parameter_reached = i >= loop_var['penalty_parameter_trace'].shape[0] - 1
+    n_outer_iterations_target = loop_var['penalty_parameter_trace'].shape[0]
+    is_maximal_penalty_parameter_reached = i >= n_outer_iterations_target - 1
 
     #
     parameters_passed_to_inner_solver = loop_var['parameters_of_dynamic_model'] + (
@@ -59,17 +60,47 @@ def _iterate(i, loop_var, solver_settings, objective_fn, verification_fn):
     variables_updated_by_inner_solver = res.params
 
     # run callback to verify the solution
-    verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best = verification_fn(
-        loop_var['verification_state'], i, res, variables_updated_by_inner_solver, loop_var['parameters_of_dynamic_model'],
-        penalty_parameter
+    (
+        verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best,
+        max_eq_error, normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next
+    ) = verification_fn(
+        loop_var['verification_state'], i, n_outer_iterations_target, res, variables_updated_by_inner_solver, loop_var['parameters_of_dynamic_model'],
+        penalty_parameter, loop_var['opt_c_eq']
     )
 
     # update the state of the optimization variables in case the outer loop shall not be aborted
     variables_next = tree_where(is_abort, loop_var['variables'], variables_updated_by_inner_solver)
 
-    # update opt_c_eq: in case the equality constraints are not satisfies yet, increase opt_c_eq by multiplication with lam > 1
-    # otherwise leave opt_c_eq untouched.
-    opt_c_eq_next = loop_var['opt_c_eq'] * jnp.where(is_equality_constraints_fulfilled, 1.0, loop_var['lam'])
+    #
+    #
+    #
+    #
+
+    # trace, _ = verification_state_next
+
+    # def _control_gamma_eq(
+    #     gamma_eq, is_equality_constraints_fulfilled, lam, max_eq_error, normalized_equality_error_change,
+    #     normalized_equality_error_gain
+    # ):
+
+    #     _lam = lam * 1.0
+
+    #     gamma_eq_next = gamma_eq * jnp.where(is_equality_constraints_fulfilled, 1.0, _lam)
+
+    #     return gamma_eq_next
+
+    # # update opt_c_eq: in case the equality constraints are not satisfies yet, increase opt_c_eq by multiplication with lam > 1
+    # # otherwise leave opt_c_eq untouched.
+    # # opt_c_eq_next = loop_var['opt_c_eq'] * jnp.where(is_equality_constraints_fulfilled, 1.0, loop_var['lam'])
+    # opt_c_eq_next = _control_gamma_eq(
+    #     loop_var['opt_c_eq'], is_equality_constraints_fulfilled, loop_var['lam'], max_eq_error, normalized_equality_error_change,
+    #     normalized_equality_error_gain
+    # )
+
+    #
+    #
+    #
+    #
 
     # solution found?
     is_finished = jnp.logical_and(is_solution_feasible, is_maximal_penalty_parameter_reached)
