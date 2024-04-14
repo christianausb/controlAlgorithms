@@ -14,6 +14,7 @@ from typing import Callable
 from jax_control_algorithms.trajectory_optim.dynamics_constraints import eval_dynamics_equality_constraints
 from jax_control_algorithms.trajectory_optim.penality_method import *
 from jax_control_algorithms.trajectory_optim.outer_loop_solver import run_outer_loop_solver
+from jax_control_algorithms.trajectory_optim.problem_definition import *
 
 """
     Perform trajectory optimization of a dynamic system by finding the control sequence that 
@@ -21,16 +22,15 @@ from jax_control_algorithms.trajectory_optim.outer_loop_solver import run_outer_
 
 """
 
-@dataclass(frozen=True)
-class Functions:
-    f: Callable
-    initial_guess: Callable = None
-    g: Callable = None
-    terminal_constraints: Callable = None
-    inequality_constraints: Callable = None
-    cost: Callable = None
-    running_cost: Callable = None
-    transform_parameters: Callable = None
+
+
+@dataclass
+class SolverReturn:
+    is_converged: bool
+    n_iter: jnp.ndarray
+    c_eq: jnp.ndarray
+    c_ineq: jnp.ndarray
+    trace: tuple
 
 
 @dataclass()
@@ -39,7 +39,7 @@ class ProblemDefinition:
     x0: jnp.ndarray
     parameters: any = None
 
-    def run(self, x0=None, parameters=None, verbose: bool = False, solver_settings=None):
+    def run(self, x0=None, parameters=None, verbose: bool = False, solver_settings:SolverSettings=None) -> SolverReturn:
         solver_return = optimize_trajectory(
             self.functions,
             self.x0 if x0 is None else x0,
@@ -54,13 +54,6 @@ class ProblemDefinition:
         return solver_return
 
 
-@dataclass
-class SolverReturn:
-    is_converged: bool
-    n_iter: jnp.ndarray
-    c_eq: jnp.ndarray
-    c_ineq: jnp.ndarray
-    trace: tuple
 
 
 def constraint_geq(x, v):
@@ -106,32 +99,21 @@ def _verify_shapes(X_guess, U_guess, x0):
     return
 
 
-def generate_penalty_parameter_trace(t_start, t_final, n_steps):
-    """
-    Generate a sequence of penalty factors to be used in the optimization process
-
-    Args:
-        t_start: Initial penalty parameter t of the penalty method
-        t_final: maximal penalty parameter t to apply
-        n_steps: the length of the trace
-    """
-    lam = (t_final / t_start)**(1 / (n_steps - 1))
-    t_trace = t_start * lam**jnp.arange(n_steps)
-    return t_trace, lam
 
 
-def get_default_solver_settings():
 
-    solver_settings = {
-        'max_iter_boundary_method': 40,
-        'max_iter_inner': 5000,
-        'c_eq_init': 100.0,
-        'lam': 1.6,
-        'eq_tol': 0.0001,
-        'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
-        'tol_inner': 0.0001,
-    }
+def get_default_solver_settings() -> SolverSettings:
 
+    # solver_settings = {
+    #     'max_iter_boundary_method': 40,
+    #     'max_iter_inner': 5000,
+    #     'c_eq_init': 100.0,
+    #     'eq_tol': 0.0001,
+    #     'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
+    #     'tol_inner': 0.0001,
+    # }
+
+    solver_settings = SolverSettings()
     return solver_settings
 
 
@@ -360,23 +342,8 @@ def optimize_trajectory(
     K = _build_sampling_index_vector(n_steps)
 
     # pack parameters and variables
-    parameters_of_dynamic_model = (K, parameters, x0)
-    static_parameters = (
-        functions.f, functions.terminal_constraints, functions.inequality_constraints, functions.cost, functions.running_cost
-    )
+    model_to_solve = ModelToSolve(functions=functions, parameters_of_dynamic_model=ParametersOfModelToSolve(K=K, x0=x0, parameters=parameters))
     variables = (X_guess, U_guess)
-
-    # pass static parameters into objective function
-    objective_ = partial(eval_objective_of_penalty_method, static_parameters=static_parameters)
-    feasibility_metric_ = partial(eval_feasibility_metric_of_penalty_method, static_parameters=static_parameters)
-
-    # verification function (non specific to given problem to solve)
-    verification_fn_ = partial(
-        verify_convergence_of_iteration,
-        feasibility_metric_fn=feasibility_metric_,
-        eq_tol=solver_settings['eq_tol'],
-        verbose=verbose
-    )
 
     # trace vars
     trace_init = init_trace_memory(
@@ -386,8 +353,8 @@ def optimize_trajectory(
 
     # run solver
     variables_star, is_converged, n_iter, trace = run_outer_loop_solver(
-        variables, parameters_of_dynamic_model, solver_settings, trace_init, objective_, verification_fn_, max_float32_iterations,
-        enable_float64, verbose
+        variables, model_to_solve, solver_settings, trace_init,
+        max_float32_iterations, enable_float64, verbose
     )
 
     # unpack results for optimized variables
@@ -421,14 +388,14 @@ class Solver:
         High-level interface to the solver
     """
 
-    def __init__(self, problem_def_fn):
+    def __init__(self, problem_def_fn, solver_settings : SolverSettings = get_default_solver_settings()):
         self.problem_def_fn = problem_def_fn
 
         # get problem definition
         self.problem_definition = problem_def_fn()
         assert type(self.problem_definition) is ProblemDefinition
 
-        self.solver_settings = get_default_solver_settings()
+        self.solver_settings = solver_settings
 
         self.enable_float64 = True
         self.max_float32_iterations = 0
