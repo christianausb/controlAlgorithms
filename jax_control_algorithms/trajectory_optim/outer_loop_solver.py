@@ -4,7 +4,7 @@ import jaxopt
 from functools import partial
 
 from jax_control_algorithms.jax_helper import *
-from jax_control_algorithms.trajectory_optim.penality_method import verify_convergence_of_iteration
+from jax_control_algorithms.trajectory_optim.penality_method import control_convergence_of_iteration
 from jax_control_algorithms.trajectory_optim.problem_definition import *
 from jax_control_algorithms.trajectory_optim.penality_method import eval_objective_of_penalty_method
 
@@ -70,8 +70,8 @@ def _iterate(i, loop_var, functions, solver_settings):
     # run verify the solution and control the convergence of to the equality constraints
     (
         verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best,
-        max_eq_error, normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next, lam
-    ) = verify_convergence_of_iteration(
+        max_eq_error, opt_c_eq_next, lam
+    ) = control_convergence_of_iteration(
         loop_var['verification_state'],
         i,
         n_outer_iterations_target,
@@ -112,7 +112,6 @@ def _run_outer_loop(
         penalty_parameter_trace,
         opt_c_eq,
         verification_state_init,
-       # lam,
         tol_inner,
     ) = convert_dtype(
         (
@@ -121,7 +120,6 @@ def _run_outer_loop(
             solver_settings['penalty_parameter_trace'],
             opt_c_eq,
             verification_state_init,
-           # solver_settings['lam'],
             solver_settings['tol_inner'],
         ),
         target_dtype
@@ -152,7 +150,6 @@ def _run_outer_loop(
             'i': loop_var['i'] + 1,
             'verification_state': verification_state_next,
             'tol_inner': loop_var['tol_inner'],
-#            'lam': loop_var['lam'],
         }
 
         return loop_var
