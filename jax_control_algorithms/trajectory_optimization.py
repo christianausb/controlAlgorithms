@@ -116,7 +116,7 @@ def get_default_solver_settings():
         'max_iter_boundary_method': 40,
         'max_iter_inner': 5000,
         'c_eq_init': 100.0,
-        'lam': 1.6,
+       # 'lam': 1.6,
         'eq_tol': 0.0001,
         'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
         'tol_inner': 0.0001,

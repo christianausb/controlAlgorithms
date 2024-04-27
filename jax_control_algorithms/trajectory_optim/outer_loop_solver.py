@@ -70,7 +70,7 @@ def _iterate(i, loop_var, functions, solver_settings):
     # run verify the solution and control the convergence of to the equality constraints
     (
         verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best,
-        max_eq_error, normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next
+        max_eq_error, normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next, lam
     ) = verify_convergence_of_iteration(
         loop_var['verification_state'],
         i,
@@ -80,6 +80,7 @@ def _iterate(i, loop_var, functions, solver_settings):
         loop_var['parameters_of_dynamic_model'],
         penalty_parameter,
         loop_var['opt_c_eq'],
+        loop_var['lam'],
         functions,
         eq_tol=solver_settings['eq_tol'],
         verbose=True
@@ -91,7 +92,7 @@ def _iterate(i, loop_var, functions, solver_settings):
     # solution found?
     is_finished = jnp.logical_and(is_solution_feasible, is_maximal_penalty_parameter_reached)
 
-    return variables_next, verification_state_next, opt_c_eq_next, is_finished, is_abort, is_X_finite
+    return variables_next, verification_state_next, opt_c_eq_next, lam, is_finished, is_abort, is_X_finite
 
 
 def _run_outer_loop(
@@ -111,7 +112,7 @@ def _run_outer_loop(
         penalty_parameter_trace,
         opt_c_eq,
         verification_state_init,
-        lam,
+       # lam,
         tol_inner,
     ) = convert_dtype(
         (
@@ -120,7 +121,7 @@ def _run_outer_loop(
             solver_settings['penalty_parameter_trace'],
             opt_c_eq,
             verification_state_init,
-            solver_settings['lam'],
+           # solver_settings['lam'],
             solver_settings['tol_inner'],
         ),
         target_dtype
@@ -132,7 +133,7 @@ def _run_outer_loop(
         # loop iteration variable i
         i = loop_var['i']
 
-        variables_next, verification_state_next, opt_c_eq_next, is_finished, is_abort, is_X_finite = _iterate(
+        variables_next, verification_state_next, opt_c_eq_next, lam, is_finished, is_abort, is_X_finite = _iterate(
             i, loop_var, model_to_solve.functions, solver_settings
         )
 
@@ -147,10 +148,11 @@ def _run_outer_loop(
             'parameters_of_dynamic_model': loop_var['parameters_of_dynamic_model'],
             'penalty_parameter_trace': penalty_parameter_trace,
             'opt_c_eq': opt_c_eq_next,
+            'lam' : lam,
             'i': loop_var['i'] + 1,
             'verification_state': verification_state_next,
             'tol_inner': loop_var['tol_inner'],
-            'lam': loop_var['lam'],
+#            'lam': loop_var['lam'],
         }
 
         return loop_var
@@ -182,10 +184,11 @@ def _run_outer_loop(
         'parameters_of_dynamic_model': model_to_solve.parameters_of_dynamic_model,
         'penalty_parameter_trace': penalty_parameter_trace,
         'opt_c_eq': opt_c_eq,
+        'lam': jnp.array(jnp.nan),
         'i': i,
         'verification_state': verification_state_init,
         'tol_inner': tol_inner,
-        'lam': lam,
+       # 'lam': lam,
     }
 
     loop_var = lax.while_loop(eval_outer_loop_condition, run_outer_loop_body, loop_var)

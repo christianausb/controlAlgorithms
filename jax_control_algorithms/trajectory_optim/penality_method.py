@@ -136,6 +136,7 @@ def verify_convergence_of_iteration(
     parameters_of_dynamic_model,
     penalty_parameter,
     opt_c_eq,  # blub
+    lam,
     # feasibility_metric_fn,
     functions,
     eq_tol,
@@ -188,10 +189,11 @@ def verify_convergence_of_iteration(
     # NOTE: it is ok if it is not monotonic, the case of step back, the control needs to increase the parameter for the
     # equality constraints
     #
-    is_not_monotonic = jnp.logical_and(
-        _check_monotonic_convergence(i, trace_next),
-        jnp.logical_not(is_converged),
-    )
+    if False:
+        is_not_monotonic = jnp.logical_and(
+            _check_monotonic_convergence(i, trace_next),
+            jnp.logical_not(is_converged),
+        )
 
     # measure the improvement of eq-constraints fulfillment
     # ideally, this metric always decreases
@@ -206,6 +208,7 @@ def verify_convergence_of_iteration(
     def _control_gamma_eq(
         i,  # loop index
         gamma_eq,
+        lam_prev,
         is_equality_constraints_fulfilled,
         normalized_equality_error,
         normalized_equality_error_change,
@@ -218,28 +221,27 @@ def verify_convergence_of_iteration(
         # normalized_equality_error = lambda ^ n_outer_iterations_target
 
         n_iter_left = n_outer_iterations_target - i
-        lam = jnp.where(n_iter_left > 3, normalized_equality_error**(1 / n_iter_left), 1.7)
+
+#        lam_default = 1.7
+        lam = jnp.where(n_iter_left > 3, normalized_equality_error**(1 / n_iter_left), lam_prev)
 
         jax.debug.print(
-            "lam={lam} normalized_equality_error={normalized_equality_error} n_outer_iterations_target={n_outer_iterations_target}",
+            "lam={lam} lam_prev={lam_prev} normalized_equality_error={normalized_equality_error} n_outer_iterations_target={n_outer_iterations_target}",
             lam=lam,
+            lam_prev=lam_prev,
             normalized_equality_error=normalized_equality_error,
             n_outer_iterations_target=n_outer_iterations_target
         )
 
-        #        lam = 1.6
+        gamma_eq_next = gamma_eq * jnp.where(is_equality_constraints_fulfilled, 1.0, lam)
 
-        _lam = lam * 1.0
-
-        gamma_eq_next = gamma_eq * jnp.where(is_equality_constraints_fulfilled, 1.0, _lam)
-
-        return gamma_eq_next
+        return gamma_eq_next, lam
 
     # update opt_c_eq: in case the equality constraints are not satisfies yet, increase opt_c_eq by multiplication with lam > 1
     # otherwise leave opt_c_eq untouched.
     # opt_c_eq_next = loop_var['opt_c_eq'] * jnp.where(is_equality_constraints_fulfilled, 1.0, loop_var['lam'])
-    opt_c_eq_next = _control_gamma_eq(
-        i, opt_c_eq, is_equality_constraints_fulfilled, normalized_equality_error, normalized_equality_error_change,
+    opt_c_eq_next, lam_next = _control_gamma_eq(
+        i, opt_c_eq, lam, is_equality_constraints_fulfilled, normalized_equality_error, normalized_equality_error_change,
         normalized_equality_error_gain, n_outer_iterations_target
     )
 
@@ -254,12 +256,13 @@ def verify_convergence_of_iteration(
 
     if verbose:
         jax.debug.print(
-            "🔄 it={i} \t (sub iter={n_iter_inner})\tt={penalty_parameter} \teq_error/eq_tol={normalized_equality_error}  gain={normalized_equality_error_gain} change={normalized_equality_error_change} \tinside bounds: {is_solution_inside_boundaries}",
+            "🔄 it={i} \t (sub iter={n_iter_inner})\tt={penalty_parameter} \teq_error/eq_tol={normalized_equality_error}  gain={normalized_equality_error_gain} lambda={lam} \tinside bounds: {is_solution_inside_boundaries}",
             i=i,
             penalty_parameter=my_to_int(my_round(penalty_parameter, decimals=0)),
             normalized_equality_error=my_to_int(my_round(100 * normalized_equality_error, decimals=0)),
             normalized_equality_error_gain=normalized_equality_error_gain,
-            normalized_equality_error_change=normalized_equality_error_change,
+            #normalized_equality_error_change=normalized_equality_error_change,
+            lam=lam_next,
             n_iter_inner=n_iter_inner,
             is_solution_inside_boundaries=is_solution_inside_boundaries,
         )
@@ -277,5 +280,5 @@ def verify_convergence_of_iteration(
     # verification_state, is_finished, is_abort, i_best
     return (
         verification_state_next, is_converged, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best, max_eq_error,
-        normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next
+        normalized_equality_error_change, normalized_equality_error_gain, opt_c_eq_next, lam_next
     )
