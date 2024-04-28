@@ -44,6 +44,6 @@ class OuterLoopVariables(NamedTuple):
     opt_c_eq: jnp.ndarray
     lam: jnp.ndarray
     i: jnp.ndarray
-    verification_state: ConvergenceControllerState
+    controller_state: ConvergenceControllerState
     tol_inner: jnp.ndarray
 

@@ -70,10 +70,10 @@ def _iterate(loop_var: OuterLoopVariables, functions, solver_settings):
 
     # run verify the solution and control the convergence of to the equality constraints
     (
-        verification_state_next, is_solution_feasible, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best,
+        controller_state_next, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best,
         max_eq_error, opt_c_eq_next, lam
     ) = control_convergence_of_iteration(
-        loop_var.verification_state,
+        loop_var.controller_state,
         i,
         n_outer_iterations_target,
         res,
@@ -91,9 +91,9 @@ def _iterate(loop_var: OuterLoopVariables, functions, solver_settings):
     variables_next = tree_where(is_abort, loop_var.variables, variables_updated_by_inner_solver)
 
     # solution found?
-    is_finished = jnp.logical_and(is_solution_feasible, is_maximal_penalty_parameter_reached)
+    is_finished = jnp.logical_and(controller_state_next.is_converged, is_maximal_penalty_parameter_reached)
 
-    return variables_next, verification_state_next, opt_c_eq_next, lam, is_finished, is_abort, is_X_finite
+    return variables_next, controller_state_next, opt_c_eq_next, lam, is_finished, is_abort, is_X_finite
 
 
 def _run_outer_loop(
@@ -149,7 +149,7 @@ def _run_outer_loop(
             opt_c_eq=opt_c_eq_next,
             lam=lam,
             i=loop_var.i + 1,
-            verification_state=verification_state_next,
+            controller_state=verification_state_next,
             tol_inner=loop_var.tol_inner,
         )
 
@@ -183,7 +183,7 @@ def _run_outer_loop(
         opt_c_eq=opt_c_eq,
         lam=jnp.array(jnp.nan),
         i=i,
-        verification_state=verification_state_init,
+        controller_state=verification_state_init,
         tol_inner=tol_inner,
     )
 
@@ -191,7 +191,7 @@ def _run_outer_loop(
 
     n_iter = loop_var.i
 
-    return loop_var.variables, loop_var.opt_c_eq, n_iter, loop_var.verification_state
+    return loop_var.variables, loop_var.opt_c_eq, n_iter, loop_var.controller_state
 
 
 def run_outer_loop_solver(

@@ -128,10 +128,13 @@ def _control_gamma_eq(
 
     gamma_eq_next = gamma_eq * jnp.where(is_equality_constraints_fulfilled, 1.0, lam)
 
+    # NOTE: normalized_equality_error_gain shall be close to lam_prev
+    # This could be used for monitoring the convergence. 
+
     return gamma_eq_next, lam
 
 def control_convergence_of_iteration(
-    verification_state : ConvergenceControllerState,
+    controller_state : ConvergenceControllerState,
     i,
     n_outer_iterations_target,
     res_inner,
@@ -149,7 +152,7 @@ def control_convergence_of_iteration(
         for each iteration of the outer optimization loop.
     """
 
-    trace = verification_state.trace
+    trace = controller_state.trace
 
     #
     is_X_finite = jnp.isfinite(variables[0]).all()
@@ -172,7 +175,6 @@ def control_convergence_of_iteration(
     trace_next, is_trace_appended = append_to_trace(
         trace, (normalized_equality_error, 1.0 * is_solution_inside_boundaries, n_iter_inner, X, U)
     )
-#    verification_state_next = (trace_next, is_converged)
     verification_state_next = ConvergenceControllerState(trace=trace_next, is_converged=is_converged)
 
     # measure the improvement of eq-constraints fulfillment
@@ -215,8 +217,7 @@ def control_convergence_of_iteration(
                 is_solution_inside_boundaries=is_solution_inside_boundaries,
             )
 
-    # verification_state, is_finished, is_abort, i_best
     return (
-        verification_state_next, is_converged, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best, max_eq_error,
+        verification_state_next, is_equality_constraints_fulfilled, is_abort, is_X_finite, i_best, max_eq_error,
         opt_c_eq_next, lam_next
     )
