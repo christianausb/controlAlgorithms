@@ -29,3 +29,22 @@ class ModelToSolve(NamedTuple):
     #K: jnp.ndarray = None
     #parameters: jnp.ndarray = None
     #x0: jnp.ndarray = None
+
+
+class OuterLoopVariables(NamedTuple):
+    is_finished: jnp.ndarray
+    is_abort: jnp.ndarray
+    is_X_finite: jnp.ndarray
+    variables: any
+    parameters_of_dynamic_model: any
+    penalty_parameter_trace: jnp.ndarray
+    opt_c_eq: jnp.ndarray
+    lam: jnp.ndarray
+    i: jnp.ndarray
+    verification_state: jnp.ndarray
+    tol_inner: jnp.ndarray
+
+class ConvergenceControllerState(NamedTuple):
+    trace : any
+    is_converged: jnp.ndarray
+    
