@@ -203,7 +203,7 @@ def run_outer_loop_solver(
 
     opt_c_eq = solver_settings['c_eq_init']
     i = 0
-    verification_state = (trace_init, jnp.array(0, dtype=jnp.bool_))
+    verification_state = ConvergenceControllerState(trace=trace_init, is_converged=jnp.array(0, dtype=jnp.bool_))
 
     # iterations that are performed using float32 datatypes
     if max_float32_iterations > 0:

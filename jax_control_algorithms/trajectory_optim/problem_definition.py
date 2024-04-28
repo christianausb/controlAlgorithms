@@ -30,6 +30,9 @@ class ModelToSolve(NamedTuple):
     #parameters: jnp.ndarray = None
     #x0: jnp.ndarray = None
 
+class ConvergenceControllerState(NamedTuple):
+    trace : any
+    is_converged: jnp.ndarray
 
 class OuterLoopVariables(NamedTuple):
     is_finished: jnp.ndarray
@@ -41,10 +44,6 @@ class OuterLoopVariables(NamedTuple):
     opt_c_eq: jnp.ndarray
     lam: jnp.ndarray
     i: jnp.ndarray
-    verification_state: jnp.ndarray
+    verification_state: ConvergenceControllerState
     tol_inner: jnp.ndarray
 
-class ConvergenceControllerState(NamedTuple):
-    trace : any
-    is_converged: jnp.ndarray
-    

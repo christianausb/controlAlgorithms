@@ -7,7 +7,7 @@ from jax_control_algorithms.jax_helper import *
 from jax_control_algorithms.trajectory_optim.boundary_function import boundary_fn
 from jax_control_algorithms.trajectory_optim.dynamics_constraints import eval_dynamics_equality_constraints
 from jax_control_algorithms.trajectory_optim.cost_function import evaluate_cost
-from jax_control_algorithms.trajectory_optim.problem_definition import Functions
+from jax_control_algorithms.trajectory_optim.problem_definition import Functions, ConvergenceControllerState
 """
     https://en.wikipedia.org/wiki/Penalty_method
 """
@@ -131,7 +131,7 @@ def _control_gamma_eq(
     return gamma_eq_next, lam
 
 def control_convergence_of_iteration(
-    verification_state,
+    verification_state : ConvergenceControllerState,
     i,
     n_outer_iterations_target,
     res_inner,
@@ -149,7 +149,7 @@ def control_convergence_of_iteration(
         for each iteration of the outer optimization loop.
     """
 
-    trace, _, = verification_state
+    trace = verification_state.trace
 
     #
     is_X_finite = jnp.isfinite(variables[0]).all()
@@ -172,7 +172,8 @@ def control_convergence_of_iteration(
     trace_next, is_trace_appended = append_to_trace(
         trace, (normalized_equality_error, 1.0 * is_solution_inside_boundaries, n_iter_inner, X, U)
     )
-    verification_state_next = (trace_next, is_converged)
+#    verification_state_next = (trace_next, is_converged)
+    verification_state_next = ConvergenceControllerState(trace=trace_next, is_converged=is_converged)
 
     # measure the improvement of eq-constraints fulfillment
     # ideally, this metric always decreases
