@@ -45,7 +45,7 @@ def _print_loop_info(loop_par: OuterLoopVariables, is_max_iter_reached_and_not_f
         lax.cond(jnp.logical_not(loop_par.is_X_finite), lambda: jax.debug.print("❌ found non finite numerics"), lambda: None)
 
 
-def _iterate(loop_var: OuterLoopVariables, functions, solver_settings):
+def _iterate(loop_var: OuterLoopVariables, functions, solver_settings : SolverSettings):
 
     i = loop_var.i
 
@@ -64,7 +64,7 @@ def _iterate(loop_var: OuterLoopVariables, functions, solver_settings):
     # objective_fn = eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, functions : Functions)
     objective_fn = partial(eval_objective_of_penalty_method, functions=functions)
 
-    gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=loop_var.tol_inner, maxiter=solver_settings['max_iter_inner'])
+    gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=loop_var.tol_inner, maxiter=solver_settings.max_iter_inner)
     res = gd.run(loop_var.variables, parameters=parameters_passed_to_inner_solver)
     variables_updated_by_inner_solver = res.params
 
@@ -83,7 +83,7 @@ def _iterate(loop_var: OuterLoopVariables, functions, solver_settings):
         loop_var.opt_c_eq,
         loop_var.lam,
         functions,
-        eq_tol=solver_settings['eq_tol'],
+        eq_tol=solver_settings.eq_tol,
         verbose=True
     )
 
@@ -97,7 +97,7 @@ def _iterate(loop_var: OuterLoopVariables, functions, solver_settings):
 
 
 def _run_outer_loop(
-    i, variables, model_to_solve: ModelToSolve, opt_c_eq, verification_state_init, solver_settings, verbose, print_errors,
+    i, variables, model_to_solve: ModelToSolve, opt_c_eq, verification_state_init, solver_settings : SolverSettings, verbose, print_errors,
     target_dtype
 ):
     """
@@ -118,10 +118,10 @@ def _run_outer_loop(
         (
             variables,
             # model_to_solve.parameters_of_dynamic_model, # model_to_solve, # model_to_solve.
-            solver_settings['penalty_parameter_trace'],
+            solver_settings.penalty_parameter_trace,
             opt_c_eq,
             verification_state_init,
-            solver_settings['tol_inner'],
+            solver_settings.tol_inner,
         ),
         target_dtype
     )
@@ -156,7 +156,7 @@ def _run_outer_loop(
         return loop_var
 
     def eval_outer_loop_condition(loop_var: OuterLoopVariables):
-        is_n_iter_not_reached = loop_var.i < solver_settings['max_iter_boundary_method']
+        is_n_iter_not_reached = loop_var.i < solver_settings.max_iter_boundary_method
 
         is_max_iter_reached_and_not_finished = jnp.logical_and(
             jnp.logical_not(is_n_iter_not_reached),
@@ -195,13 +195,13 @@ def _run_outer_loop(
 
 
 def run_outer_loop_solver(
-    variables, model_to_solve, solver_settings, trace_init, max_float32_iterations, enable_float64, verbose
+    variables, model_to_solve, solver_settings : SolverSettings, trace_init, max_float32_iterations, enable_float64, verbose
 ):
     """
         execute the solution finding process
     """
 
-    opt_c_eq = solver_settings['c_eq_init']
+    opt_c_eq = solver_settings.c_eq_init
     i = 0
     verification_state = ConvergenceControllerState(trace=trace_init, is_converged=jnp.array(0, dtype=jnp.bool_))
 

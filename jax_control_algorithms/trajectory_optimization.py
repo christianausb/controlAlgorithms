@@ -23,13 +23,23 @@ from jax_control_algorithms.trajectory_optim.problem_definition import *
 """
 
 
+
+@dataclass
+class SolverReturn:
+    is_converged: bool
+    n_iter: jnp.ndarray
+    c_eq: jnp.ndarray
+    c_ineq: jnp.ndarray
+    trace: tuple
+
+
 @dataclass()
 class ProblemDefinition:
     functions: Functions
     x0: jnp.ndarray
     parameters: any = None
 
-    def run(self, x0=None, parameters=None, verbose: bool = False, solver_settings=None):
+    def run(self, x0=None, parameters=None, verbose: bool = False, solver_settings:SolverSettings=None) -> SolverReturn:
         solver_return = optimize_trajectory(
             self.functions,
             self.x0 if x0 is None else x0,
@@ -44,13 +54,6 @@ class ProblemDefinition:
         return solver_return
 
 
-@dataclass
-class SolverReturn:
-    is_converged: bool
-    n_iter: jnp.ndarray
-    c_eq: jnp.ndarray
-    c_ineq: jnp.ndarray
-    trace: tuple
 
 
 def constraint_geq(x, v):
@@ -96,31 +99,21 @@ def _verify_shapes(X_guess, U_guess, x0):
     return
 
 
-def generate_penalty_parameter_trace(t_start, t_final, n_steps):
-    """
-    Generate a sequence of penalty factors to be used in the optimization process
-
-    Args:
-        t_start: Initial penalty parameter t of the penalty method
-        t_final: maximal penalty parameter t to apply
-        n_steps: the length of the trace
-    """
-    lam = (t_final / t_start)**(1 / (n_steps - 1))
-    t_trace = t_start * lam**jnp.arange(n_steps)
-    return t_trace, lam
 
 
-def get_default_solver_settings():
 
-    solver_settings = {
-        'max_iter_boundary_method': 40,
-        'max_iter_inner': 5000,
-        'c_eq_init': 100.0,
-        'eq_tol': 0.0001,
-        'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
-        'tol_inner': 0.0001,
-    }
+def get_default_solver_settings() -> SolverSettings:
 
+    # solver_settings = {
+    #     'max_iter_boundary_method': 40,
+    #     'max_iter_inner': 5000,
+    #     'c_eq_init': 100.0,
+    #     'eq_tol': 0.0001,
+    #     'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
+    #     'tol_inner': 0.0001,
+    # }
+
+    solver_settings = SolverSettings()
     return solver_settings
 
 
@@ -395,14 +388,14 @@ class Solver:
         High-level interface to the solver
     """
 
-    def __init__(self, problem_def_fn):
+    def __init__(self, problem_def_fn, solver_settings : SolverSettings = get_default_solver_settings()):
         self.problem_def_fn = problem_def_fn
 
         # get problem definition
         self.problem_definition = problem_def_fn()
         assert type(self.problem_definition) is ProblemDefinition
 
-        self.solver_settings = get_default_solver_settings()
+        self.solver_settings = solver_settings
 
         self.enable_float64 = True
         self.max_float32_iterations = 0
