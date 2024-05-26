@@ -41,11 +41,21 @@ def _objective(variables, parameters_passed_to_solver, functions : Functions):
     # apply boundary costs (boundary function)
     J_boundary_costs = jnp.mean(boundary_fn(c_ineq, penalty_parameter, 11, True))
 
-    return J_equality_costs + J_cost_function + J_boundary_costs, c_eq
+    return (
+        J_equality_costs, J_cost_function, J_boundary_costs, 
+        c_eq, c_ineq,
+    )
 
 
 def eval_objective_of_penalty_method(variables, parameters, functions : Functions):
-    return _objective(variables, parameters, functions)[0]
+    J_equality_costs, J_cost_function, J_boundary_costs, _, _ = _objective(variables, parameters, functions)
+
+    return J_equality_costs + J_cost_function + J_boundary_costs
+
+    #return _objective(variables, parameters, functions)[0]
+
+def eval_objective_of_penalty_method_2(variables, parameters, functions : Functions):
+    return _objective(variables, parameters, functions)
 
 
 def eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, functions : Functions):
