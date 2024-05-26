@@ -73,5 +73,5 @@ class SolverSettings(NamedTuple):
     max_iter_inner:float = 5000
     c_eq_init :float = 100.0
     eq_tol :float = 0.0001
-    penalty_parameter_trace : jnp.array = generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0]
+    penalty_parameter_trace : jnp.array = generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)
     tol_inner:float = 0.0001

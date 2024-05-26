@@ -109,7 +109,7 @@ def get_default_solver_settings() -> SolverSettings:
     #     'max_iter_inner': 5000,
     #     'c_eq_init': 100.0,
     #     'eq_tol': 0.0001,
-    #     'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0],
+    #     'penalty_parameter_trace': generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13),
     #     'tol_inner': 0.0001,
     # }
 
@@ -275,7 +275,7 @@ def optimize_trajectory(
                 generate_penalty_parameter_trace.
 
                 Default value:
-                    generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0]
+                    generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)
 
             tol_inner: float
                 tolerance passed to the inner solver
