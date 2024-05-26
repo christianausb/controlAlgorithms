@@ -4,7 +4,12 @@ from jax import numpy as jnp
 
 #from jax_control_algorithms.trajectory_optim.penality_method import generate_penalty_parameter_trace
 
-def generate_penalty_parameter_trace(t_start, t_final, n_steps):
+def _generate_penalty_parameter_trace(t_start, t_final, n_steps):
+    lam = (t_final / t_start)**(1 / (n_steps - 1))
+    t_trace = t_start * lam**jnp.arange(n_steps)
+    return t_trace, lam
+
+def generate_penalty_parameter_trace(t_start=0.5, t_final=100, n_steps=13):
     """
     Generate a sequence of penalty factors to be used in the optimization process
 
@@ -13,9 +18,8 @@ def generate_penalty_parameter_trace(t_start, t_final, n_steps):
         t_final: maximal penalty parameter t to apply
         n_steps: the length of the trace
     """
-    lam = (t_final / t_start)**(1 / (n_steps - 1))
-    t_trace = t_start * lam**jnp.arange(n_steps)
-    return t_trace, lam
+    return _generate_penalty_parameter_trace(t_start, t_final, n_steps)[0]
+
 
 @dataclass(frozen=True)
 class Functions:
@@ -69,5 +73,5 @@ class SolverSettings(NamedTuple):
     max_iter_inner:float = 5000
     c_eq_init :float = 100.0
     eq_tol :float = 0.0001
-    penalty_parameter_trace : jnp.array = generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)[0]
+    penalty_parameter_trace : jnp.array = generate_penalty_parameter_trace(t_start=0.5, t_final=100.0, n_steps=13)
     tol_inner:float = 0.0001

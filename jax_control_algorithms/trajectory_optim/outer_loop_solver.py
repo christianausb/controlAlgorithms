@@ -6,7 +6,7 @@ from functools import partial
 from jax_control_algorithms.jax_helper import *
 from jax_control_algorithms.trajectory_optim.penality_method import control_convergence_of_iteration
 from jax_control_algorithms.trajectory_optim.problem_definition import *
-from jax_control_algorithms.trajectory_optim.penality_method import eval_objective_of_penalty_method
+from jax_control_algorithms.trajectory_optim.penality_method import eval_objective_of_penalty_method, eval_objective_of_penalty_method_2
 """
     Implements the nested solver loops
 
@@ -45,7 +45,7 @@ def _print_loop_info(loop_par: OuterLoopVariables, is_max_iter_reached_and_not_f
         lax.cond(jnp.logical_not(loop_par.is_X_finite), lambda: jax.debug.print("❌ found non finite numerics"), lambda: None)
 
 
-def _iterate(loop_var: OuterLoopVariables, functions, solver_settings : SolverSettings):
+def _iterate(loop_var: OuterLoopVariables, functions, solver_settings : SolverSettings, verbose: bool):
 
     i = loop_var.i
 
@@ -62,11 +62,32 @@ def _iterate(loop_var: OuterLoopVariables, functions, solver_settings : SolverSe
 
     # run inner solver
     # objective_fn = eval_feasibility_metric_of_penalty_method(variables, parameters_of_dynamic_model, functions : Functions)
-    objective_fn = partial(eval_objective_of_penalty_method, functions=functions)
+    objective_fn = partial(
+        eval_objective_of_penalty_method,
+        functions=functions
+    )
 
     gd = jaxopt.BFGS(fun=objective_fn, value_and_grad=False, tol=loop_var.tol_inner, maxiter=solver_settings.max_iter_inner)
     res = gd.run(loop_var.variables, parameters=parameters_passed_to_inner_solver)
     variables_updated_by_inner_solver = res.params
+
+    # eval objective function on found solution
+
+    (
+        J_equality_costs, J_cost_function, J_boundary_costs, 
+        c_eq, c_ineq,
+    ) = eval_objective_of_penalty_method_2(
+        variables=variables_updated_by_inner_solver, parameters=parameters_passed_to_inner_solver, functions=functions
+    )
+
+    if False:
+        jax.debug.print(
+                    "   J_equality_costs={J_equality_costs} J_cost_function={J_cost_function} J_boundary_costs={J_boundary_costs}",
+                    J_equality_costs=J_equality_costs,
+                    J_cost_function=J_cost_function,
+                    J_boundary_costs=J_boundary_costs,
+                )
+    #
 
     # run verify the solution and control the convergence of to the equality constraints
     (
@@ -84,7 +105,7 @@ def _iterate(loop_var: OuterLoopVariables, functions, solver_settings : SolverSe
         loop_var.lam,
         functions,
         eq_tol=solver_settings.eq_tol,
-        verbose=True
+        verbose=verbose,
     )
 
     # update the state of the optimization variables in case the outer loop shall not be aborted
@@ -133,7 +154,7 @@ def _run_outer_loop(
         i = loop_var.i
 
         variables_next, verification_state_next, opt_c_eq_next, lam, is_finished, is_abort, is_X_finite = _iterate(
-            loop_var, model_to_solve.functions, solver_settings
+            loop_var, model_to_solve.functions, solver_settings, verbose
         )
 
         if verbose:
